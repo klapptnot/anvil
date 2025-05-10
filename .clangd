@@ -1,0 +1,12 @@
+---
+CompileFlags:
+  Add:
+    - "-I/home/klapptnot/repos/anvil/src/libs"
+    - "-x"
+    - "c"
+    - "-std=c23"
+    - "-Wall"
+    - "-Werror"
+    - "-Wdangling"
+    - "-Wextra"
+    - "-pedantic"

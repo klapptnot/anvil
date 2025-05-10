@@ -1,0 +1,30 @@
+#!/usr/bin/bash
+
+function main {
+  if ! command -v git &> /dev/null || ! git rev-parse --is-inside-work-tree &> /dev/null; then
+    export ANVIL_RETURN=""
+    return
+  fi
+
+  read -r git_hash < <(git rev-parse HEAD 2> /dev/null)
+  read -r mod _ _ ins _ del _ < <(git diff --shortstat 2> /dev/null)
+  read -r git_branch < <(git branch --show-current 2> /dev/null)
+  mapfile -t untracked < <(git ls-files --other --exclude-standard 2> /dev/null)
+  mapfile -t untracked_dirs < <(dirname -- "${untracked[@]}" 2> /dev/null | sort -u)
+
+  # <files>@<branch> +<additions>/-<deletions> (● <untracked_files>@<untracked_folders>)
+  printf -v GIT_INFO '%s: %d@%s +%d/-%d (● %d@%d)\x1b[0m\n' \
+    "${git_hash:0:8}" \
+    "${mod}" \
+    "${git_branch}" \
+    "${ins}" \
+    "${del}" \
+    "${#untracked[@]}" \
+    "${#untracked_dirs[@]}" 2> /dev/null
+
+  export ANVIL_RETURN="${GIT_INFO}"
+}
+
+export ANVIL_TRIM="true"
+
+main "${@}"

@@ -1,0 +1,99 @@
+# this is a subset of YAML, refer to docs.
+# there's no support for scalars, or blocks.
+# documentation, huh? Just read error messages.
+package: 'anvil' # Too expensive!
+version: '0.1' # There's no mayor version, till we reach 0.4
+author : 'Klapptnot Z3' # UwU~
+description: "A safe #{C} build tool-- UwU~"
+
+# these are just as (for now) these anchors
+# are not defined by default, it will be
+# these will be like the "use default", or
+# just to have some values that are valid (we'll see)
+_: &exec "executable"
+
+# override build tool defaults, AWD == Anvil Work Dir (project root)
+workspace: {
+  libs: "#{AWD}/libs", # default "#{AWD}/src/libs"
+  target: "#{AWD}/build" # default "#{AWD}/target"
+}
+
+# build targets (index 0 is default for `anvil build` or `anvil run`)
+# Otherwise: `anvil build --target <name>`
+targets: [
+  {
+    name: "anvil",
+    type: *exec, # Yeah, this alias is a global of `anvil`
+    main: "#{AWD}/src/main.c",
+    macros: {},
+    target: [
+      "x86_64-linux-gnu",
+      "aarch64-linux-gnu"
+    ]
+  }
+]
+
+build: {
+  compiler: "clang",
+  cstd: "c23",
+
+  # arguments are defined below
+  # hooks are bash scripts in `hooks` folder
+  macros: {
+    GIT_HASH: "#{arg:git_hash}",
+    GIT_INFO: "#{hook:git_info}"
+  },
+
+  arguments: {
+    git_hash: {
+      validate_str: "off", # off, compact, content, strict
+      cache_policy: "memoize", # never, memoize, always
+      commands: [
+        "git rev-parse HEAD"
+      ]
+    }
+  },
+
+  deps: [
+    {
+      name: "gtk4",
+      # pkg-config == "use system dependencies"
+      type: "pkg-config"
+    },
+    {
+      name: "stb_image",
+      type: "github",
+      repo: "nothings/stb",
+      # if it ends with `/`, repo will be cloned (if that path exists in repo)
+      # and that folder will be added as -I{path_to_folder}
+      # Otherwise, the single file will be downloaded to a folder
+      path: "stb_image.h"
+    }
+  ]
+}
+
+# those 2 profiles are required
+# one can be defined (release), adding an anchor
+# and define debug as release, to make the same
+# release: &release_prof {...},
+# debug: *release_prof,
+profiles: {
+  release: [
+    "-O3", # lol
+    "-Werror",
+    "-DNDEBUG",
+    "-Wall",
+    "-Wextra",
+    "-pedantic"
+  ],
+
+  debug: [
+    "-ggdb",
+    "-Werror",
+    "-O1",
+    "-fstack-protector-strong",
+    "-D_FORTIFY_SOURCE=2",
+    "-fsanitize=address,undefined",
+    "-fno-omit-frame-pointer"
+  ]
+}
