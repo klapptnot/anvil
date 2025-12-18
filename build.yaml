@@ -4,7 +4,7 @@
 package: 'anvil' # Too expensive!
 version: '0.1' # There's no mayor version, till we reach 0.4
 author : 'Klapptnot Z3' # UwU~
-description: "A safe #{C} build tool-- UwU~"
+description: "A #{C} build tool-- UwU~"
 
 # these are just as (for now) these anchors
 # are not defined by default, it will be

@@ -37,6 +37,7 @@ bool fill (String* s, void* ctx, char* path, size_t) {
     printf ("{l: %2zu, m: %2zu} \"%s\"", s.len, s.max, s.chr); \
     z3_drops (&s);                                             \
   }
+
 void print_anvil_config (const AnvilConfig* config) {
   if (!config) {
     printf ("AnvilConfig is NULL\n");
