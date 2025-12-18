@@ -1,5 +1,3 @@
-#define __YAML_DISPLAY
-
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>

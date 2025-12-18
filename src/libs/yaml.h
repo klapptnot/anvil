@@ -60,6 +60,7 @@ enum TagKind {
   TAG_ALIAS,
   TAG_KEY,
   TAG_BOOL,
+  TAG_MERGE
 };
 
 // Enumeration of token types for lexical analysis
@@ -81,6 +82,7 @@ typedef enum {
   TOKEN_OPEN_SEQ,    // Start of sequence token
   TOKEN_CLOSE_SEQ,   // End of sequence token
   TOKEN_EOF,         // End of input token
+  TOKEN_MERGE,       //= Merge value
   TOKEN_INDENT,      //= Container node open
   TOKEN_DEDENT,      //= Container node close
 } TokenKind;
@@ -235,7 +237,7 @@ Node* parse_boolean (Tokenizer* tokenizer, Token token);
 Node* create_node (NodeKind kind);
 
 // Recursively free memory allocated for a node
-void free_node (Node* node);
+bool free_node (Node* node);
 
 // Add a key-value pair to a map
 void map_add (Map* map, char* key, Node* value);
@@ -252,102 +254,3 @@ void free_yaml (Node* node);
 // Retrieve an arbitrary node from a map by its key
 Node* map_get_node (Node* node, const char* key);
 
-#define CT_TOKEN_KIND_STRING(kind) #kind
-
-#ifdef __YAML_TEST
-
-inline const char* node_kind_to_string (NodeKind kind) {
-  switch (kind) {
-    case NODE_MAP:
-      return "NODE_MAP";
-    case NODE_SEQUENCE:
-      return "NODE_SEQUENCE";
-    case NODE_STRING:
-      return "NODE_STRING";
-    case NODE_NUMBER:
-      return "NODE_NUMBER";
-    case NODE_BOOLEAN:
-      return "NODE_BOOLEAN";
-    default:
-      return "UNKNOWN";
-  }
-}
-
-#define token_dbg(t, token)                                                                  \
-  {                                                                                          \
-    char* v = token_value (t, token);                                                        \
-    printf ("TOKEN: ~%3zu %36s '%s'\n", token.length, token_kind_to_string (token.kind), v); \
-    free (v);                                                                                \
-  }
-
-[[clang::always_inline]] const char* nodeKindToValue (Node* node) {
-  static char _buf[20];
-
-  switch (node->kind) {
-    case NODE_STRING:
-      return node->string;
-    case NODE_NUMBER:
-      snprintf (_buf, sizeof (_buf), "%f", node->number);
-      return _buf;
-    case NODE_BOOLEAN:
-      return node->boolean ? "true" : "false";
-    default:
-      return "UNKNOWN";
-  }
-}
-
-void map_walk (Node* node, int indent);
-void seq_walk (Node* node, int indent) {
-  for (size_t i = 0; i < node->sequence.size; i++) {
-    Node* value = node->sequence.items[i];
-    if (value->kind == NODE_MAP) {
-      printf (
-          "\x1b[1;36m%*s[%zu]{%zu}%s:\x1b[0m\n", indent, "", i, value->map.size,
-          node_kind_to_string (value->kind)
-      );
-      map_walk (value, indent + 2);
-      continue;
-    }
-    if (value->kind == NODE_SEQUENCE) {
-      printf (
-          "%*s\x1b[1;34m[%zu]{%zu}%s:\x1b[0m\n", indent, "", i, value->map.size,
-          node_kind_to_string (value->kind)
-      );
-      seq_walk (value, indent + 2);
-      continue;
-    }
-    printf (
-        "%*s\x1b[1;32m[%zu]%s:\x1b[0m %s\n", indent, "", i, node_kind_to_string (value->kind),
-        nodeKindToValue (value)
-    );
-  }
-}
-
-void map_walk (Node* node, int indent) {
-  for (size_t i = 0; i < node->map.size; i++) {
-    char* name = node->map.entries[i].key;
-    Node* value = node->map.entries[i].val;
-    if (value->kind == NODE_MAP) {
-      printf (
-          "\x1b[1;36m%*s[%zu]{%zu}%s:\x1b[0m %s\n", indent, "", i, value->map.size,
-          node_kind_to_string (value->kind), name
-      );
-      map_walk (value, indent + 2);
-      continue;
-    }
-    if (value->kind == NODE_SEQUENCE) {
-      printf (
-          "%*s\x1b[1;34m[%zu]{%zu}%s:\x1b[0m %s\n", indent, "", i, value->map.size,
-          node_kind_to_string (value->kind), name
-      );
-      seq_walk (value, indent + 2);
-      continue;
-    }
-    printf (
-        "%*s\x1b[1;32m[%zu]%s:\x1b[0m %s = %s\n", indent, "", i,
-        node_kind_to_string (value->kind), name, nodeKindToValue (value)
-    );
-  }
-}
-
-#endif  // __YAML_DISPLAY

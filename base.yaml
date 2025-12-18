@@ -1,0 +1,44 @@
+base: &base { id: '001', type: 'user' }
+settings: &settings {
+  theme: 'dark',
+  font: 'monospace,
+  size: 'medium'
+}
+user_main: {
+  <<: *base,
+  name: 'Ari',
+  status: 'active'
+}
+user_alt: {
+  <<: *base,
+  name: 'Z3',
+  status: 'inactive',
+  meta: { verified: true, level: '5' }
+}
+paths: { home: "/home/klapptnot", temp: "/tmp" }
+env: {
+  os: 'linux',
+  arch: 'x86_64',
+  shell: "/usr/bin/nu"
+}
+nested: {
+  item: {
+    key: 'value',
+    inner: {
+      a: 'A',
+      b: 'B',
+      c: 'C'
+    }
+  }
+}
+servers: [
+  { host: 'localhost', port: '8080' },
+  {
+    host: 'example.com',
+    port: '443',
+    secure: true
+  },
+  { host: 'backup.local', port: '3000' }
+]
+notes: { desc: 'All configs use flow-style only' }
+

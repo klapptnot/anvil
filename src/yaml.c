@@ -1,15 +1,43 @@
+#include <stdint.h>
+#ifdef __YAML_TEST
+#define Z3_TOYS_IMPL
+#define Z3_STRING_IMPL
+#endif
+
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <yaml.h>
 #include <z3_toys.h>
+#include <z3_vector.h>
 
 #include "paerr.c"
 
+int safe_open_file (const char* filepath) {
+  if (!filepath) return -1;
+
+  int fd = open (filepath, O_RDONLY | O_NONBLOCK);
+  if (fd == -1) return -1;
+
+  struct stat st;
+  if (fstat (fd, &st) == -1 || !S_ISREG (st.st_mode)) {
+    close (fd);
+    return -1;
+  }
+
+  return fd;
+}
+
 extern const char* const token_kind_strings[];
+const char* node_kind_names[];
+
+extern const uint8_t char_flags[256];
 #define token_kind_to_string(kind) token_kind_strings[kind]
 
 Token create_token (TokenKind kind, size_t start, size_t length, size_t line, size_t column) {
@@ -27,12 +55,11 @@ Token create_token (TokenKind kind, size_t start, size_t length, size_t line, si
   return tokenizer->input[tokenizer->cpos];
 }
 
-// #define skip_char(tokenizer)                               \
+// #define m_skip_char(tokenizer)                         \
 //   (tokenizer->input[tokenizer->cpos++] == CHAR_NEWLINE \
-//        ? (tokenizer->line++, tokenizer->column = 1)        \
-//        : (tokenizer->column++))
+//        ? (tokenizer->line++, tokenizer->ccol = 1)    \
+//        : (tokenizer->ccol++))
 
-// Advance the input position, updating line and column tracking
 [[clang::always_inline]] void skip_char (Tokenizer* tokenizer) {
   if (tokenizer->input[tokenizer->cpos++] == CHAR_NEWLINE) {
     tokenizer->line++;
@@ -50,15 +77,30 @@ void skip_whitespace (Tokenizer* tokenizer) {
   }
   if (tokenizer->input[tokenizer->cpos] == CHAR_TAB) {
     parser_error (
-        tokenizer,
-        (YamlError){
-            .kind = TAB_INDENTATION,
-            .pos = tokenizer->cpos,
-            .len = 1,
-            .got = "",
-            .exp = "",
-        }
+        tokenizer, (YamlError){
+                       .kind = TAB_INDENTATION,
+                       .pos = tokenizer->cpos,
+                       .len = 1,
+                       .got = "",
+                       .exp = "",
+                   }
     );
+  }
+}
+
+char skip_all_whitespace (Tokenizer* tokenizer) {
+  while (1) {
+    skip_whitespace (tokenizer);
+
+    char c = peek_char (tokenizer);
+    if (c != CHAR_NEWLINE) return c;
+
+    do {
+      tokenizer->cpos++;
+      tokenizer->line++;
+    } while (tokenizer->input[tokenizer->cpos] == CHAR_NEWLINE);
+
+    tokenizer->ccol = 1;
   }
 }
 
@@ -74,7 +116,10 @@ char* token_value (Tokenizer* tokenizer, Token token) {
   // }
 
   char* slice = malloc (token.length + 1);
-  if (!slice) return NULL;  //= Handle allocation failure
+  if (!slice) {
+    eprintf ("Out of memory allocating %zu bytes", token.length + 1);
+    exit (EXIT_FAILURE);
+  }
 
   memcpy (slice, tokenizer->input + token.start, token.length);
   slice[token.length] = '\0';
@@ -88,8 +133,8 @@ char* token_value (Tokenizer* tokenizer, Token token) {
 
 Token next_token (Tokenizer* tokenizer) {
   int loop_track = 1;
-  int alias_tag = TAG_NULL;
-prevent_recursion_by_going_back_to_start:
+  int ident_flag = TAG_NULL;
+go_back_to_start:
   if (peek_char (tokenizer) == CHAR_EOF) {
     tokenizer->cur_token =
         create_token (TOKEN_EOF, tokenizer->cpos, 0, tokenizer->line, tokenizer->ccol);
@@ -110,24 +155,24 @@ prevent_recursion_by_going_back_to_start:
         tokenizer->line++;
       }
       tokenizer->ccol = 1;
-      goto prevent_recursion_by_going_back_to_start;
+      goto go_back_to_start;
 
     case CHAR_HASH:
       // read until end of line
       while (peek_char (tokenizer) != CHAR_NEWLINE && peek_char (tokenizer) != CHAR_EOF) {
         skip_char (tokenizer);
       }
-      goto prevent_recursion_by_going_back_to_start;
+      goto go_back_to_start;
 
     case CHAR_AMPERSAND:
-      alias_tag = TAG_ANCHOR;
+      ident_flag = TAG_ANCHOR;
       skip_char (tokenizer);
-      goto prevent_recursion_by_going_back_to_start;
+      goto go_back_to_start;
 
     case CHAR_ASTERISK:
-      alias_tag = TAG_ALIAS;
+      ident_flag = TAG_ALIAS;
       skip_char (tokenizer);
-      goto prevent_recursion_by_going_back_to_start;
+      goto go_back_to_start;
 
     case CHAR_COLON:
       tokenizer->cur_token =
@@ -181,6 +226,16 @@ prevent_recursion_by_going_back_to_start:
         );
         exit (EXIT_FAILURE);
       }
+      if (peek_char (tokenizer) != CHAR_QUOTE_DOUBLE) {
+        parser_error (
+            tokenizer, (YamlError){.kind = UNCLOSED_QUOTE,
+                                   .pos = tokenizer->cpos,
+                                   .len = 1,
+                                   .got = peek_char (tokenizer) == CHAR_EOF ? "EOF" : "NEWLINE",
+                                   .exp = (char*)CHAR_QUOTE_DOUBLE}
+        );
+        exit (EXIT_FAILURE);
+      }
 
       tokenizer->cur_token = create_token (
           TOKEN_STRING, start_position, tokenizer->cpos - start_position + 1, start_line,
@@ -215,61 +270,68 @@ prevent_recursion_by_going_back_to_start:
       return tokenizer->cur_token;
 
     default:
-      // Handle numbers
-      if ((isdigit (c) || c == '.' || c == '-' || c == '+')) {
+      // if (c == '<') {
+      //   if (tokenizer->input[tokenizer->cpos + 1] == '<') {
+      //     skip_char (tokenizer);
+      //     return create_token (TOKEN_MERGE, tokenizer->cpos - 1, 2, start_line,
+      //     start_column);
+      //   }
+      // }
+      if (char_flags[(uint8_t)c]) {
+        bool is_numeric = (isdigit (c) || c == '.' || c == '-' || c == '+');
         skip_char (tokenizer);
 
-        while (true) {
-          c = peek_char (tokenizer);
-          if (!isdigit (c) && c != '.' && c != 'e' && c != 'E' && c != '-' && c != '+' &&
-              c != '_')
-            break;
+        while (char_flags[(uint8_t)peek_char (tokenizer)] & (is_numeric ? 1 : 2)) {
           skip_char (tokenizer);
         }
 
-        tokenizer->cur_token = create_token (
-            TOKEN_NUMBER, start_position, tokenizer->cpos - start_position, start_line,
-            start_column
-        );
-        return tokenizer->cur_token;
-      }
-
-      // identifiers (keys)
-      if (isalnum (c) || c == '_' || c == '-' || c == '.') {
-        skip_char (tokenizer);
-
-        // Read until invalid identifier character
-        while (isalnum (peek_char (tokenizer)) || peek_char (tokenizer) == '_' ||
-               peek_char (tokenizer) == '-' || peek_char (tokenizer) == '.') {
-          skip_char (tokenizer);
+        // ':' can be in key name, but the last one shoulf be
+        // TOKEN_COLON, so step back
+        if (peek_char (tokenizer) == ' ' && tokenizer->input[tokenizer->cpos - 1] == ':') {
+          tokenizer->cpos -= 1;
+          tokenizer->ccol -= 1;
         }
 
-        // Check if it's a boolean
         length = tokenizer->cpos - start_position;
-        if (peek_char (tokenizer) != CHAR_COLON &&
-            ((length == 4 && strncmp (tokenizer->input + start_position, "true", 4) == 0) ||
-             (length == 5 && strncmp (tokenizer->input + start_position, "false", 5) == 0))) {
-          tokenizer->cur_token =
-              create_token (TOKEN_BOOLEAN, start_position, length, start_line, start_column);
-        } else {
-          if (alias_tag == TAG_ANCHOR)
-            tokenizer->cur_token = create_token (
-                TOKEN_ANCHOR, start_position - 1, length + 1, start_line, start_column
+
+        // Handle boolean detection and token creation
+        if (!is_numeric && peek_char (tokenizer) != CHAR_COLON) {
+          if ((length == 4 && !memcmp (tokenizer->input + start_position, "true", 4)) ||
+              (length == 5 && !memcmp (tokenizer->input + start_position, "false", 5))) {
+            return (
+                tokenizer->cur_token = create_token (
+                    TOKEN_BOOLEAN, start_position, length, start_line, start_column
+                )
             );
-          else if (alias_tag == TAG_ALIAS)
-            tokenizer->cur_token = create_token (
-                TOKEN_ALIAS, start_position - 1, length + 1, start_line, start_column
-            );
-          else
-            tokenizer->cur_token =
-                create_token (TOKEN_KEY, start_position, length, start_line, start_column);
+          }
         }
 
-        return tokenizer->cur_token;
+        TokenKind type;
+        int position_adj = 0, length_adj = 0;
+
+        if (is_numeric) {
+          type = TOKEN_NUMBER;
+        } else if (ident_flag == TAG_ANCHOR) {
+          type = TOKEN_ANCHOR;
+          position_adj = -1;
+          length_adj = 1;
+        } else if (ident_flag == TAG_ALIAS) {
+          type = TOKEN_ALIAS;
+          position_adj = -1;
+          length_adj = 1;
+        } else {
+          type = TOKEN_KEY;
+        }
+
+        return (
+            tokenizer->cur_token = create_token (
+                type, start_position + position_adj, length + length_adj, start_line,
+                start_column
+            )
+        );
       }
 
-      if (peek_char (tokenizer) == CHAR_EOF || loop_track--)
-        goto prevent_recursion_by_going_back_to_start;
+      if (peek_char (tokenizer) == CHAR_EOF || loop_track--) goto go_back_to_start;
 
       tokenizer->cur_token =
           create_token (TOKEN_UNKNOWN, tokenizer->cpos, 1, start_line, start_column);
@@ -282,7 +344,7 @@ Node* create_node (NodeKind kind) {
   if (!node) {
     eprintf ("Out of memory allocating %zu bytes", sizeof (Node));
     exit (EXIT_FAILURE);
-  };
+  }
 
   node->kind = kind;
   node->rcount = 1;
@@ -322,11 +384,11 @@ Node* create_node (NodeKind kind) {
   return node;
 }
 
-void free_node (Node* node) {
-  if (!node) return;
+bool free_node (Node* node) {
+  if (!node) return false;
   if (node->rcount > 1) {
     node->rcount--;
-    return;
+    return false;
   }
 
   switch (node->kind) {
@@ -337,8 +399,7 @@ void free_node (Node* node) {
 
     case NODE_MAP:
       for (size_t i = 0; i < node->map.size; i++) {
-        free (node->map.entries[i].key);
-        free_node (node->map.entries[i].val);
+        if (free_node (node->map.entries[i].val)) free (node->map.entries[i].key);
       }
       free (node->map.entries);
       break;
@@ -358,6 +419,7 @@ void free_node (Node* node) {
 
   free (node);
   node = NULL;
+  return true;
 }
 
 void map_add (Map* map, char* key, Node* val) {
@@ -450,7 +512,7 @@ Node* parse_boolean (Tokenizer* tokenizer, Token token) {
 Node* parse_seq (Tokenizer* tokenizer) {
   Node* node = create_node (NODE_SEQUENCE);
 
-  int loop_c = 0;
+  int comma_found = 0;
   // Don't consume tokens, loop once more
   // Expects to close or have a value, and
   // parse_value consumes tokens
@@ -458,7 +520,7 @@ Node* parse_seq (Tokenizer* tokenizer) {
     Node* item = parse_value (tokenizer);
 
     if (item) {
-      loop_c = 0;
+      comma_found = 0;
       sequence_add (&node->sequence, item);
       continue;
     }
@@ -466,16 +528,15 @@ Node* parse_seq (Tokenizer* tokenizer) {
     Token token = peek_token (tokenizer);
 
     if (peek_token (tokenizer).kind == TOKEN_COMMA) {
-      if (loop_c++) {
+      if (comma_found++) {
         parser_error (
-            tokenizer,
-            (YamlError){
-                .kind = UNEXPECTED_TOKEN,
-                .pos = token.start,
-                .len = token.length,
-                .got = token_kind_to_string (TOKEN_COMMA),
-                .exp = "a value",
-            }
+            tokenizer, (YamlError){
+                           .kind = UNEXPECTED_TOKEN,
+                           .pos = token.start,
+                           .len = token.length,
+                           .got = token_kind_to_string (TOKEN_COMMA),
+                           .exp = "a value",
+                       }
         );
       }
       continue;
@@ -489,14 +550,13 @@ Node* parse_seq (Tokenizer* tokenizer) {
 
     // 2 errors can be here, either expected value or close_seq
     parser_error (
-        tokenizer,
-        (YamlError){
-            .kind = UNEXPECTED_TOKEN,
-            .pos = token.start,
-            .len = token.length,
-            .got = token_kind_to_string (token.kind),
-            .exp = token_kind_to_string (TOKEN_CLOSE_SEQ),
-        }
+        tokenizer, (YamlError){
+                       .kind = UNEXPECTED_TOKEN,
+                       .pos = token.start,
+                       .len = token.length,
+                       .got = token_kind_to_string (token.kind),
+                       .exp = comma_found ? "a value" : token_kind_to_string (TOKEN_COMMA),
+                   }
     );
   }
 
@@ -506,25 +566,30 @@ Node* parse_seq (Tokenizer* tokenizer) {
 Node* parse_map (Tokenizer* tokenizer) {
   Node* node = create_node (NODE_MAP);
 
+  Z3Vector merge_maps = z3_vec (size_t);
+  bool skip_level = false;
   while (true) {
     Token token = next_token (tokenizer);
 
     if (token.kind == TOKEN_COMMA && next_token (tokenizer).kind == TOKEN_COMMA) {
       parser_error (
-          tokenizer,
-          (YamlError){
-              .kind = UNEXPECTED_TOKEN,
-              .pos = token.start,
-              .len = token.length,
-              .got = token_kind_to_string (TOKEN_COMMA),
-              .exp = "a key",
-          }
+          tokenizer, (YamlError){
+                         .kind = UNEXPECTED_TOKEN,
+                         .pos = token.start,
+                         .len = token.length,
+                         .got = token_kind_to_string (TOKEN_COMMA),
+                         .exp = "a key",
+                     }
       );
     } else {
       token = peek_token (tokenizer);
     }
 
     if (token.kind == TOKEN_EOF || token.kind == TOKEN_CLOSE_MAP) {
+      if (skip_level) {
+        skip_level = false;
+        continue;
+      }
       break;
     };
 
@@ -533,37 +598,85 @@ Node* parse_map (Tokenizer* tokenizer) {
       Token colon_token = next_token (tokenizer);
       if (colon_token.kind != TOKEN_COLON) {
         parser_error (
-            tokenizer,
-            (YamlError){
-                .kind = UNEXPECTED_TOKEN,
-                .pos = colon_token.start,
-                .len = colon_token.length,
-                .got = token_kind_to_string (colon_token.kind),
-                .exp = token_kind_to_string (TOKEN_COLON),
-            }
+            tokenizer, (YamlError){
+                           .kind = UNEXPECTED_TOKEN,
+                           .pos = colon_token.start,
+                           .len = colon_token.length,
+                           .got = token_kind_to_string (colon_token.kind),
+                           .exp = token_kind_to_string (TOKEN_COLON),
+                       }
         );
       }
 
-      Node* value_node = parse_value (tokenizer);
-      if (!value_node) {
+      char* key = token_value (tokenizer, token);
+
+      if (!memcmp (key, "<<\0", 3)) {
+        char c = skip_all_whitespace (tokenizer);
+        free (key);
+
+        if (c != CHAR_OPEN_BRACE && c != CHAR_ASTERISK) {
+          token = next_token (tokenizer);
+          parser_error (
+              tokenizer, (YamlError){
+                             .kind = UNEXPECTED_TOKEN,
+                             .pos = token.start,
+                             .len = token.length,
+                             .exp = "map or map alias",
+                             .got = token_kind_to_string (token.kind),
+                         }
+          );
+        }
+
+        Node* value = parse_value (tokenizer);
+
+        if (value->kind != NODE_MAP) {
+          parser_error (
+              tokenizer, (YamlError){
+                             .kind = UNEXPECTED_TOKEN,
+                             .pos = token.start,
+                             .len = token.length,
+                             .exp = "map",
+                             .got = node_kind_names[value->kind],
+                         }
+          );
+        }
+
+        z3_push (merge_maps, value);
+        continue;
+      }
+
+      Node* val = parse_value (tokenizer);
+      if (!val) {
         break;
       }
 
-      map_add (&node->map, token_value (tokenizer, token), value_node);
+      map_add (&node->map, key, val);
       continue;
     }
 
+    // .exp can be token_kind_to_string (TOKEN_CLOSE_MAP)
     parser_error (
-        tokenizer,
-        (YamlError){
-            .kind = UNEXPECTED_TOKEN,
-            .pos = token.start,
-            .len = token.length,
-            .got = token_kind_to_string (token.kind),
-            .exp = token_kind_to_string (TOKEN_CLOSE_MAP),
-        }
+        tokenizer, (YamlError){
+                       .kind = UNEXPECTED_TOKEN,
+                       .pos = token.start,
+                       .len = token.length,
+                       .got = token_kind_to_string (token.kind),
+                       .exp = token_kind_to_string (TOKEN_KEY),
+                   }
     );
   }
+
+  for (size_t i = 0; i < merge_maps.len; i++) {
+    Node** val = z3_get (merge_maps, i);
+    (*val)->rcount--;
+    for (size_t i = 0; i < (*val)->map.size; i++) {
+      char* name = (*val)->map.entries[i].key;
+      Node* value = (*val)->map.entries[i].val;
+      value->rcount++;
+      map_add (&node->map, name, value);
+    }
+  }
+  z3_drop_vec (merge_maps);
 
   return node;
 }
@@ -658,14 +771,13 @@ Node* parse_yaml (const char* input) {
   Node* root = parse_map (&tokenizer);
   if (tokenizer.input[tokenizer.cpos] != CHAR_EOF) {
     parser_error (
-        &tokenizer,
-        (YamlError){
-            .kind = UNEXPECTED_TOKEN,
-            .pos = tokenizer.cpos - 1,
-            .len = tokenizer.cur_token.length,
-            .got = token_kind_to_string (tokenizer.cur_token.kind),
-            .exp = token_kind_to_string (TOKEN_KEY),
-        }
+        &tokenizer, (YamlError){
+                        .kind = UNEXPECTED_TOKEN,
+                        .pos = tokenizer.cpos - 1,
+                        .len = tokenizer.cur_token.length,
+                        .got = token_kind_to_string (tokenizer.cur_token.kind),
+                        .exp = token_kind_to_string (TOKEN_KEY),
+                    }
     );
   }
 
@@ -711,11 +823,120 @@ const char* const token_kind_strings[] = {
     "TOKEN_OPEN_SEQ",    // 13
     "TOKEN_CLOSE_SEQ",   // 14
     "TOKEN_EOF",         // 15
-    "TOKEN_INDENT",      // 16
-    "TOKEN_DEDENT",      // 17
+    "TOKEN_MERGE",       // 16
+    "TOKEN_INDENT",      // 17
+    "TOKEN_DEDENT",      // 18
+};
+
+const char* node_kind_names[] = {
+    [NODE_MAP] = "NODE_MAP",
+    [NODE_SEQUENCE] = "NODE_SEQUENCE",
+    [NODE_STRING] = "NODE_STRING",
+    [NODE_NUMBER] = "NODE_NUMBER",
+    [NODE_BOOLEAN] = "NODE_BOOLEAN"
+};
+
+// Define valid character sets for both types
+const uint8_t char_flags[256] = {
+    ['0'] = 3, ['1'] = 3, ['2'] = 3, ['3'] = 3, ['4'] = 3, ['5'] = 3, ['6'] = 3,
+    ['7'] = 3, ['8'] = 3, ['9'] = 3,
+
+    ['<'] = 2, [':'] = 2,  // add all symbols allowed in YAML keys, all with 2 as value
+
+    ['a'] = 2, ['b'] = 2, ['c'] = 2, ['d'] = 2, ['e'] = 3, ['f'] = 2, ['g'] = 2,
+    ['h'] = 2, ['i'] = 2, ['j'] = 2, ['k'] = 2, ['l'] = 2, ['m'] = 2, ['n'] = 2,
+    ['o'] = 2, ['p'] = 2, ['q'] = 2, ['r'] = 2, ['s'] = 2, ['t'] = 2, ['u'] = 2,
+    ['v'] = 2, ['w'] = 2, ['x'] = 2, ['y'] = 2, ['z'] = 2,
+
+    ['A'] = 2, ['B'] = 2, ['C'] = 2, ['D'] = 2, ['E'] = 3, ['F'] = 2, ['G'] = 2,
+    ['H'] = 2, ['I'] = 2, ['J'] = 2, ['K'] = 2, ['L'] = 2, ['M'] = 2, ['N'] = 2,
+    ['O'] = 2, ['P'] = 2, ['Q'] = 2, ['R'] = 2, ['S'] = 2, ['T'] = 2, ['U'] = 2,
+    ['V'] = 2, ['W'] = 2, ['X'] = 2, ['Y'] = 2, ['Z'] = 2,
+
+    ['_'] = 2, ['-'] = 3, ['.'] = 3, ['+'] = 3,
 };
 
 #ifdef __YAML_TEST
+
+#define node_kind_to_string(kind) node_kind_names[kind]
+
+#define token_dbg(t, token)                                                                  \
+  {                                                                                          \
+    char* v = token_value (t, token);                                                        \
+    printf ("TOKEN: ~%3zu %36s '%s'\n", token.length, token_kind_to_string (token.kind), v); \
+    free (v);                                                                                \
+  }
+
+[[clang::always_inline]] const char* node_value (Node* node) {
+  static char _buf[20];
+
+  switch (node->kind) {
+    case NODE_STRING:
+      return node->string;
+    case NODE_NUMBER:
+      snprintf (_buf, sizeof (_buf), "%f", node->number);
+      return _buf;
+    case NODE_BOOLEAN:
+      return node->boolean ? "true" : "false";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+void map_walk (Node* node, int indent);
+void seq_walk (Node* node, int indent) {
+  for (size_t i = 0; i < node->sequence.size; i++) {
+    Node* value = node->sequence.items[i];
+    if (value->kind == NODE_MAP) {
+      printf (
+          "\x1b[1;36m%*s[%zu]{%zu}%s:\x1b[0m\n", indent, "", i, value->map.size,
+          node_kind_to_string (value->kind)
+      );
+      map_walk (value, indent + 2);
+      continue;
+    }
+    if (value->kind == NODE_SEQUENCE) {
+      printf (
+          "%*s\x1b[1;34m[%zu]{%zu}%s:\x1b[0m\n", indent, "", i, value->map.size,
+          node_kind_to_string (value->kind)
+      );
+      seq_walk (value, indent + 2);
+      continue;
+    }
+    printf (
+        "%*s\x1b[1;32m[%zu]%s:\x1b[0m %s\n", indent, "", i, node_kind_to_string (value->kind),
+        node_value (value)
+    );
+  }
+}
+
+void map_walk (Node* node, int indent) {
+  for (size_t i = 0; i < node->map.size; i++) {
+    char* name = node->map.entries[i].key;
+    Node* value = node->map.entries[i].val;
+    if (value->kind == NODE_MAP) {
+      printf (
+          "\x1b[1;36m%*s[%zu]{%zu}%s:\x1b[0m %s\n", indent, "", i, value->map.size,
+          node_kind_to_string (value->kind), name
+      );
+      map_walk (value, indent + 2);
+      continue;
+    }
+    if (value->kind == NODE_SEQUENCE) {
+      printf (
+          "%*s\x1b[1;34m[%zu]{%zu}%s:\x1b[0m %s\n", indent, "", i, value->map.size,
+          node_kind_to_string (value->kind), name
+      );
+      seq_walk (value, indent + 2);
+      continue;
+    }
+    printf (
+        "%*s\x1b[1;32m[%zu]%s:\x1b[0m %s = %s\n", indent, "", i,
+        node_kind_to_string (value->kind), name, node_value (value)
+    );
+  }
+}
+
 // this main function is just for debug
 // this runs the tokenizer and prints all tokens
 // like:

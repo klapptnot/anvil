@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <z3_string.h>
 #include <z3_vector.h>
+#include "config.h"
 
 bool target_needs_rebuild (String *target, Z3Vector deps) {
   struct stat target_stat;
@@ -68,3 +69,7 @@ void parse_dependencies (String *str, Z3Vector *deps) {
     }
   }
 }
+
+// void get_make_dependencies (BuildConfig *config, Z3Vector *deps) {
+//   //
+// }
