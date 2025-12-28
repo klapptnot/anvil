@@ -36,7 +36,7 @@ typedef struct {
   Z3HashMap* map;  // pointer to the map being iterated
   size_t index;    // current index in the table
   char* key;       // current key
-  void* val;     // current value
+  void* val;       // current value
 } Z3HashMapIterator;
 
 //~ Create a new empty hash map with default capacity
@@ -107,6 +107,37 @@ Z3HashMap* z3_hashmap_create (void) {
 void z3_hashmap_put (Z3HashMap* map, const char* key, void* value) {
   if (!key || !value) return;
 
+  // Check if we need to grow before inserting
+  if (map->count >= map->capacity * 3 / 4) {
+    size_t old_capacity = map->capacity;
+    struct Z3HashMapEntry* old_entries = map->entries;
+
+    map->capacity *= 2;
+    map->entries =
+        (struct Z3HashMapEntry*)calloc (map->capacity, sizeof (struct Z3HashMapEntry));
+    map->count = 0;
+
+    // Rehash all existing entries
+    for (size_t i = 0; i < old_capacity; ++i) {
+      if (old_entries[i].used && old_entries[i].key) {
+        uint64_t hash = old_entries[i].hash;
+        for (size_t j = 0; j < map->capacity; ++j) {
+          size_t idx = z3__probe (hash, j, map->capacity);
+          struct Z3HashMapEntry* entry = &map->entries[idx];
+          if (!entry->used) {
+            entry->used = 1;
+            entry->key = old_entries[i].key;  // Transfer ownership
+            entry->val = old_entries[i].val;  // Transfer ownership
+            entry->hash = hash;
+            map->count++;
+            break;
+          }
+        }
+      }
+    }
+    free (old_entries);
+  }
+
   uint64_t hash = z3__hash_str (key);
   for (size_t i = 0; i < map->capacity; ++i) {
     size_t idx = z3__probe (hash, i, map->capacity);
@@ -122,7 +153,6 @@ void z3_hashmap_put (Z3HashMap* map, const char* key, void* value) {
       return;
     }
   }
-  // TODO: grow here
 }
 
 const char* z3_hashmap_get (Z3HashMap* map, const char* key) {

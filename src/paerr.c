@@ -61,6 +61,12 @@ bool parser_filler (String* res, void* ctx, char* item, size_t len) {
       return true;
     case MISSING_COMMA:
       return true;
+    case UNCLOSED_QUOTE:
+      if (strncmp (item, "exp", 3 > len ? len : 3) == 0)
+        z3_pushl (res, ctxs->exp, strlen (ctxs->exp));
+      else
+        z3_pushl (res, ctxs->got, strlen (ctxs->got));
+      return true;
     default:
       z3_pushl (res, "Unknown error occurred.", 23);
       return true;
@@ -78,7 +84,7 @@ void parser_error (Tokenizer* tokenizer, YamlError error) {
       "Alias #{} is already defined.",
       "Missing value after key #{}.",
       "Comma missing between elements in a collection.",
-      "Reached EOF while looking for matching quote."
+      "Reached #{got} while looking for matching `#{exp}` quote."
   };
   // Find the start of the error line
   const char* input = tokenizer->input;

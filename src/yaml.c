@@ -220,21 +220,17 @@ go_back_to_start:
       }
 
       if (peek_char (tokenizer) != CHAR_QUOTE_DOUBLE) {
-        eprintf (
-            "Reached %s while looking for matching double quote.\n",
-            peek_char (tokenizer) == CHAR_EOF ? "EOF" : "NEWLINE"
-        );
-        exit (EXIT_FAILURE);
-      }
-      if (peek_char (tokenizer) != CHAR_QUOTE_DOUBLE) {
+        // eprintf (
+        //     "Reached %s while looking for matching double quote.\n",
+        //     peek_char (tokenizer) == CHAR_EOF ? "EOF" : "NEWLINE"
+        // );
         parser_error (
             tokenizer, (YamlError){.kind = UNCLOSED_QUOTE,
-                                   .pos = tokenizer->cpos,
-                                   .len = 1,
+                                   .pos = start_position,  // position of opening quote
+                                   .len = tokenizer->cpos - start_position,
                                    .got = peek_char (tokenizer) == CHAR_EOF ? "EOF" : "NEWLINE",
-                                   .exp = (char*)CHAR_QUOTE_DOUBLE}
+                                   .exp = "\""}
         );
-        exit (EXIT_FAILURE);
       }
 
       tokenizer->cur_token = create_token (
@@ -254,11 +250,13 @@ go_back_to_start:
       }
 
       if (peek_char (tokenizer) != CHAR_QUOTE_SINGLE) {
-        eprintf (
-            "Reached %s while looking for matching single quote.\n",
-            peek_char (tokenizer) == CHAR_EOF ? "EOF" : "NEWLINE"
+        parser_error (
+            tokenizer, (YamlError){.kind = UNCLOSED_QUOTE,
+                                   .pos = start_position,  // position of opening quote
+                                   .len = tokenizer->cpos - start_position,
+                                   .got = peek_char (tokenizer) == CHAR_EOF ? "EOF" : "NEWLINE",
+                                   .exp = "'"}
         );
-        exit (EXIT_FAILURE);
       }
 
       tokenizer->cur_token = create_token (
@@ -544,9 +542,18 @@ Node* parse_seq (Tokenizer* tokenizer) {
 
     token = peek_token (tokenizer);
 
-    if (token.kind == TOKEN_EOF || token.kind == TOKEN_CLOSE_SEQ) {
-      break;
-    }
+    if (token.kind == TOKEN_EOF)
+      parser_error (
+          tokenizer, (YamlError){
+                         .kind = UNEXPECTED_TOKEN,
+                         .pos = token.start - 1,
+                         .len = 1,
+                         .got = token_kind_to_string (token.kind),
+                         .exp = token_kind_to_string (TOKEN_CLOSE_SEQ),
+                     }
+      );
+
+    if (token.kind == TOKEN_CLOSE_SEQ) break;
 
     // 2 errors can be here, either expected value or close_seq
     parser_error (
@@ -585,7 +592,18 @@ Node* parse_map (Tokenizer* tokenizer) {
       token = peek_token (tokenizer);
     }
 
-    if (token.kind == TOKEN_EOF || token.kind == TOKEN_CLOSE_MAP) {
+    if (token.kind == TOKEN_EOF)
+      parser_error (
+          tokenizer, (YamlError){
+                         .kind = UNEXPECTED_TOKEN,
+                         .pos = token.start - 1,
+                         .len = 1,
+                         .got = token_kind_to_string (token.kind),
+                         .exp = token_kind_to_string (TOKEN_CLOSE_MAP),
+                     }
+      );
+
+    if (token.kind == TOKEN_CLOSE_MAP) {
       if (skip_level) {
         skip_level = false;
         continue;
@@ -749,6 +767,18 @@ Node* parse_value (Tokenizer* tokenizer) {
 
     case TOKEN_OPEN_SEQ:
       return parse_seq (tokenizer);
+
+    case TOKEN_KEY:
+    case TOKEN_UNKNOWN:
+      parser_error (
+          tokenizer, (YamlError){
+                         .kind = UNEXPECTED_TOKEN,
+                         .pos = token.start,
+                         .len = token.length,
+                         .got = token_kind_to_string (token.kind),
+                         .exp = "a value",
+                     }
+      );
 
     default:
       return NULL;
