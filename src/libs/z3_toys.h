@@ -27,11 +27,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Allow scoped cleanup in implementations
-#ifndef Z3_IMPL_SCOPED
-#define __Z3_TOYS_SCOPED
-#endif
-
 // Compiler-specific warning suppression
 #if defined(__GNUC__) || defined(__clang__)
 #define IGNORE_UNUSED(declaration)                                                \
