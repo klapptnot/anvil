@@ -136,6 +136,7 @@ Token next_token (Tokenizer* tokenizer) {
   int ident_flag = TAG_NULL;
 go_back_to_start:
   if (peek_char (tokenizer) == CHAR_EOF) {
+    tokenizer->line--;
     tokenizer->cur_token =
         create_token (TOKEN_EOF, tokenizer->cpos, 0, tokenizer->line, tokenizer->ccol);
     return tokenizer->cur_token;
@@ -220,10 +221,6 @@ go_back_to_start:
       }
 
       if (peek_char (tokenizer) != CHAR_QUOTE_DOUBLE) {
-        // eprintf (
-        //     "Reached %s while looking for matching double quote.\n",
-        //     peek_char (tokenizer) == CHAR_EOF ? "EOF" : "NEWLINE"
-        // );
         parser_error (
             tokenizer, (YamlError){.kind = UNCLOSED_QUOTE,
                                    .pos = start_position,  // position of opening quote
@@ -382,11 +379,11 @@ Node* create_node (NodeKind kind) {
   return node;
 }
 
-bool free_node (Node* node) {
-  if (!node) return false;
+void free_node (Node* node) {
+  if (!node) return;
   if (node->rcount > 1) {
     node->rcount--;
-    return false;
+    return;
   }
 
   switch (node->kind) {
@@ -397,7 +394,8 @@ bool free_node (Node* node) {
 
     case NODE_MAP:
       for (size_t i = 0; i < node->map.size; i++) {
-        if (free_node (node->map.entries[i].val)) free (node->map.entries[i].key);
+        free_node (node->map.entries[i].val);
+        free (node->map.entries[i].key);
       }
       free (node->map.entries);
       break;
@@ -417,7 +415,6 @@ bool free_node (Node* node) {
 
   free (node);
   node = NULL;
-  return true;
 }
 
 void map_add (Map* map, char* key, Node* val) {
@@ -510,37 +507,9 @@ Node* parse_boolean (Tokenizer* tokenizer, Token token) {
 Node* parse_seq (Tokenizer* tokenizer) {
   Node* node = create_node (NODE_SEQUENCE);
 
-  int comma_found = 0;
-  // Don't consume tokens, loop once more
-  // Expects to close or have a value, and
-  // parse_value consumes tokens
   while (true) {
     Node* item = parse_value (tokenizer);
-
-    if (item) {
-      comma_found = 0;
-      sequence_add (&node->sequence, item);
-      continue;
-    }
-
-    Token token = peek_token (tokenizer);
-
-    if (peek_token (tokenizer).kind == TOKEN_COMMA) {
-      if (comma_found++) {
-        parser_error (
-            tokenizer, (YamlError){
-                           .kind = UNEXPECTED_TOKEN,
-                           .pos = token.start,
-                           .len = token.length,
-                           .got = token_kind_to_string (TOKEN_COMMA),
-                           .exp = "a value",
-                       }
-        );
-      }
-      continue;
-    }
-
-    token = peek_token (tokenizer);
+    Token token = next_token (tokenizer);
 
     if (token.kind == TOKEN_EOF)
       parser_error (
@@ -553,18 +522,19 @@ Node* parse_seq (Tokenizer* tokenizer) {
                      }
       );
 
-    if (token.kind == TOKEN_CLOSE_SEQ) break;
+    if (token.kind != TOKEN_COMMA && token.kind != TOKEN_CLOSE_SEQ)
+      parser_error (
+          tokenizer, (YamlError){
+                         .kind = UNEXPECTED_TOKEN,
+                         .pos = token.start,
+                         .len = token.length,
+                         .got = token_kind_to_string (token.kind),
+                         .exp = token_kind_to_string (TOKEN_CLOSE_SEQ),
+                     }
+      );
 
-    // 2 errors can be here, either expected value or close_seq
-    parser_error (
-        tokenizer, (YamlError){
-                       .kind = UNEXPECTED_TOKEN,
-                       .pos = token.start,
-                       .len = token.length,
-                       .got = token_kind_to_string (token.kind),
-                       .exp = comma_found ? "a value" : token_kind_to_string (TOKEN_COMMA),
-                   }
-    );
+    sequence_add (&node->sequence, item);
+    if (token.kind == TOKEN_CLOSE_SEQ) break;
   }
 
   return node;
@@ -574,25 +544,26 @@ Node* parse_map (Tokenizer* tokenizer) {
   Node* node = create_node (NODE_MAP);
 
   Z3Vector merge_maps = z3_vec (size_t);
-  bool skip_level = false;
+  TokenKind expected_next = TOKEN_UNKNOWN;
   while (true) {
     Token token = next_token (tokenizer);
 
-    if (token.kind == TOKEN_COMMA && next_token (tokenizer).kind == TOKEN_COMMA) {
-      parser_error (
-          tokenizer, (YamlError){
-                         .kind = UNEXPECTED_TOKEN,
-                         .pos = token.start,
-                         .len = token.length,
-                         .got = token_kind_to_string (TOKEN_COMMA),
-                         .exp = "a key",
-                     }
-      );
-    } else {
-      token = peek_token (tokenizer);
+    if (token.kind == TOKEN_CLOSE_MAP) break;
+    token = peek_token (tokenizer);
+
+    if (token.kind == TOKEN_COMMA) {
+      if (tokenizer->root_mark == 0) {
+        expected_next = TOKEN_KEY;
+        goto unexpected_token_inloop;
+      }
+      token = next_token (tokenizer);
+    } else if (node->map.size > 0 && tokenizer->root_mark > 0) {
+      expected_next = TOKEN_COMMA;
+      goto unexpected_token_inloop;
     }
 
-    if (token.kind == TOKEN_EOF)
+    if (token.kind == TOKEN_EOF) {
+      if (tokenizer->root_mark == 0) break;
       parser_error (
           tokenizer, (YamlError){
                          .kind = UNEXPECTED_TOKEN,
@@ -602,76 +573,64 @@ Node* parse_map (Tokenizer* tokenizer) {
                          .exp = token_kind_to_string (TOKEN_CLOSE_MAP),
                      }
       );
+    }
 
-    if (token.kind == TOKEN_CLOSE_MAP) {
-      if (skip_level) {
-        skip_level = false;
-        continue;
-      }
-      break;
-    };
+    if (token.kind != TOKEN_KEY) {
+      expected_next = TOKEN_KEY;
+      goto unexpected_token_inloop;
+    }
 
-    if (token.kind == TOKEN_KEY) {
-      token = peek_token (tokenizer);
-      Token colon_token = next_token (tokenizer);
-      if (colon_token.kind != TOKEN_COLON) {
+    token = peek_token (tokenizer);
+    Token colon_token = next_token (tokenizer);
+
+    if (colon_token.kind != TOKEN_COLON) {
+      expected_next = TOKEN_COLON;
+      goto unexpected_token_inloop;
+    }
+
+    char* key = token_value (tokenizer, token);
+
+    if (!memcmp (key, "<<\0", 3)) {
+      char c = skip_all_whitespace (tokenizer);
+      free (key);
+
+      if (c != CHAR_OPEN_BRACE && c != CHAR_ASTERISK) {
+        token = next_token (tokenizer);  // just needed for error
         parser_error (
             tokenizer, (YamlError){
                            .kind = UNEXPECTED_TOKEN,
-                           .pos = colon_token.start,
-                           .len = colon_token.length,
-                           .got = token_kind_to_string (colon_token.kind),
-                           .exp = token_kind_to_string (TOKEN_COLON),
+                           .pos = token.start,
+                           .len = token.length,
+                           .exp = "map or map alias",
+                           .got = token_kind_to_string (token.kind),
                        }
         );
       }
 
-      char* key = token_value (tokenizer, token);
+      Node* value = parse_value (tokenizer);
 
-      if (!memcmp (key, "<<\0", 3)) {
-        char c = skip_all_whitespace (tokenizer);
-        free (key);
-
-        if (c != CHAR_OPEN_BRACE && c != CHAR_ASTERISK) {
-          token = next_token (tokenizer);
-          parser_error (
-              tokenizer, (YamlError){
-                             .kind = UNEXPECTED_TOKEN,
-                             .pos = token.start,
-                             .len = token.length,
-                             .exp = "map or map alias",
-                             .got = token_kind_to_string (token.kind),
-                         }
-          );
-        }
-
-        Node* value = parse_value (tokenizer);
-
-        if (value->kind != NODE_MAP) {
-          parser_error (
-              tokenizer, (YamlError){
-                             .kind = UNEXPECTED_TOKEN,
-                             .pos = token.start,
-                             .len = token.length,
-                             .exp = "map",
-                             .got = node_kind_names[value->kind],
-                         }
-          );
-        }
-
-        z3_push (merge_maps, value);
-        continue;
+      if (value->kind != NODE_MAP) {
+        parser_error (
+            tokenizer, (YamlError){
+                           .kind = UNEXPECTED_TOKEN,
+                           .pos = token.start,
+                           .len = token.length,
+                           .exp = "map",
+                           .got = node_kind_names[value->kind],
+                       }
+        );
       }
 
-      Node* val = parse_value (tokenizer);
-      if (!val) {
-        break;
-      }
-
-      map_add (&node->map, key, val);
+      z3_push (merge_maps, value);
       continue;
     }
 
+    Node* val = parse_value (tokenizer);
+    map_add (&node->map, key, val);
+
+    continue;
+
+  unexpected_token_inloop:
     // .exp can be token_kind_to_string (TOKEN_CLOSE_MAP)
     parser_error (
         tokenizer, (YamlError){
@@ -679,7 +638,7 @@ Node* parse_map (Tokenizer* tokenizer) {
                        .pos = token.start,
                        .len = token.length,
                        .got = token_kind_to_string (token.kind),
-                       .exp = token_kind_to_string (TOKEN_KEY),
+                       .exp = token_kind_to_string (expected_next),
                    }
     );
   }
@@ -696,6 +655,7 @@ Node* parse_map (Tokenizer* tokenizer) {
   }
   z3_drop_vec (merge_maps);
 
+  tokenizer->root_mark--;
   return node;
 }
 
@@ -763,13 +723,14 @@ Node* parse_value (Tokenizer* tokenizer) {
       return parse_boolean (tokenizer, token);
 
     case TOKEN_OPEN_MAP:
+      tokenizer->root_mark++;
       return parse_map (tokenizer);
 
     case TOKEN_OPEN_SEQ:
       return parse_seq (tokenizer);
 
-    case TOKEN_KEY:
-    case TOKEN_UNKNOWN:
+    default:
+      eprintf ("unreachable~! UwU~\n");
       parser_error (
           tokenizer, (YamlError){
                          .kind = UNEXPECTED_TOKEN,
@@ -779,9 +740,6 @@ Node* parse_value (Tokenizer* tokenizer) {
                          .exp = "a value",
                      }
       );
-
-    default:
-      return NULL;
   }
 }
 
@@ -845,7 +803,6 @@ const char* const token_kind_strings[] = {
     "TOKEN_BOOLEAN",     // 5
     "TOKEN_COLON",       // 6
     "TOKEN_COMMA",       // 7
-    "TOKEN_NEWLINE",     // 8
     "TOKEN_ANCHOR",      // 9
     "TOKEN_ALIAS",       // 10
     "TOKEN_OPEN_MAP",    // 11
@@ -989,8 +946,12 @@ int main (int argc, char** argv) {
   yaml_input[length] = '\0';
   fclose (file);
 
-  // Tokenizer tokenizer;
-  // tokenizer_init (&tokenizer, yaml_input);
+  // Tokenizer tokenizer = {};
+  // tokenizer.input = yaml_input;
+  // tokenizer.cpos = 0;
+  // tokenizer.line = 1;
+  // tokenizer.ccol = 1;
+  // tokenizer.aliases = (YamlAliasList){.length = 0, .items = NULL};
   // while (true) {
   //   Token token = next_token (&tokenizer);
   //   token_dbg (&tokenizer, token);
