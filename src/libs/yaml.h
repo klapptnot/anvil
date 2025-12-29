@@ -74,7 +74,6 @@ typedef enum {
   TOKEN_BOOLEAN,     // Boolean (true/false) token
   TOKEN_COLON,       // Separator token
   TOKEN_COMMA,       // Collection element separator
-  TOKEN_NEWLINE,     // Line break token
   TOKEN_ANCHOR,      // Anchor definition token
   TOKEN_ALIAS,       // Alias reference token
   TOKEN_OPEN_MAP,    // Start of mapping token
@@ -178,6 +177,7 @@ typedef struct {
 
 // Tokenizer state tracking for parsing
 typedef struct {
+  int root_mark;
   const char* input;      // Input YAML string
   size_t cpos;            // Current parsing position
   size_t line;            // Current line number
@@ -237,7 +237,7 @@ Node* parse_boolean (Tokenizer* tokenizer, Token token);
 Node* create_node (NodeKind kind);
 
 // Recursively free memory allocated for a node
-bool free_node (Node* node);
+void free_node (Node* node);
 
 // Add a key-value pair to a map
 void map_add (Map* map, char* key, Node* value);
