@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-present Klapptnot
+
 #include <stdint.h>
 #ifdef __YAML_TEST
 #define Z3_TOYS_IMPL

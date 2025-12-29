@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-present Klapptnot
+
 #include <bits/types/time_t.h>
 #include <ctype.h>
 #include <errno.h>
