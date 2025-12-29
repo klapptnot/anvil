@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-present Klapptnot
+
 #include <z3_vector.h>
 #include <z3_string.h>
 #include "config.h"
