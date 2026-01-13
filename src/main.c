@@ -25,23 +25,23 @@ String float_to_str (float num);
 
 // z3_dropfn (String, z3_drops);
 
-bool fill (String* s, void* ctx, char* path, size_t) {
-  Z3Vector* any = ctx;
-  size_t i = atoi (path);
-  if (i > any->len) return false;
-  String* as = z3_get (*any, i);
-  z3_pushl (s, as->chr, as->len);
-  return true;
-}
+// static bool fill (String* s, void* ctx, const char* path, size_t /*unused*/) {
+//   Z3Vector* any = ctx;
+//   size_t i = (size_t)strtol (path, nullptr, 10);  // NOLINT(readability-magic-numbers)
+//   if (i > any->len) return false;
+//   String* as = z3_get (*any, i);
+//   z3_pushl (s, as->chr, as->len);
+//   return true;
+// }
 
-#define __dynarray_print_String(val)                           \
+#define _dynarray_print_String(val)                            \
   {                                                            \
     String s = z3_escape ((val)->chr, (val)->len);             \
     printf ("{l: %2zu, m: %2zu} \"%s\"", s.len, s.max, s.chr); \
     z3_drops (&s);                                             \
   }
 
-void print_anvil_config (const AnvilConfig* config) {
+static void print_anvil_config (const AnvilConfig* config) {
   if (!config) {
     printf ("AnvilConfig is NULL\n");
     return;
@@ -132,30 +132,32 @@ void print_anvil_config (const AnvilConfig* config) {
 }
 
 int main (int argc, char** argv) {
-  IGNORE_UNUSED (char* _this_file = popf (argc, argv));
-  char* file_name = popf (argc, argv);
+  IGNORE_UNUSED (char* _this_file = popf (argc, argv));  // NOLINT (concurrency-mt-unsafe)
+  char* file_name = popf (argc, argv);                   // NOLINT (concurrency-mt-unsafe)
 
   FILE* file = fopen (file_name, "r");
-  fseek (file, 0, SEEK_END);
+  CHECK_OR_RETURN (fseek (file, 0, SEEK_END), 1);
   long length = ftell (file);
-  fseek (file, 0, SEEK_SET);
+  CHECK_OR_RETURN (fseek (file, 0, SEEK_SET), 1);
+  CHECK_OR_RETURN (length, 1);
+  size_t file_size = (size_t)length;
 
-  char* yaml_input = malloc (next_power_of2 (length + 1));
-  IGNORE_UNUSED (fread (yaml_input, 1, length, file));
-  yaml_input[length] = '\0';
-  fclose (file);
+  char* yaml_input = malloc (next_power_of2 (file_size + 1));
+  if (fread (yaml_input, 1, file_size, file) != file_size) return 1;
+  yaml_input[file_size] = '\0';
+  CHECK_OR_RETURN (fclose (file), 1);
 
   Node* root = parse_yaml (yaml_input);
 
   if (!root) {
-    eprintf ("Failed to parse YAML\n");
+    errpfmt ("Failed to parse YAML\n");
     return 1;
   }
 
   AnvilConfig* config = malloc (sizeof (AnvilConfig));
   dset_anvil_config (config, root);
   print_anvil_config (config);
-
+  free_anvil_config (config);
   free_yaml (root);
 
   free (yaml_input);

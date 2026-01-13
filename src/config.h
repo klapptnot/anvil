@@ -87,3 +87,9 @@ void dset_build_config (BuildConfig* bconf, Node* node);
 
 // Sets up an AnvilConfig structure based on the provided YAML node.
 void dset_anvil_config (AnvilConfig* conf, Node* node);
+
+
+void free_profile_config (Z3HashMap* pconf);
+void free_target_config (BuildTarget* tconf);
+void free_build_config (BuildConfig* bconf);
+void free_anvil_config (AnvilConfig* conf);

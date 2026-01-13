@@ -34,6 +34,7 @@
 #if defined(__GNUC__) || defined(__clang__)
 #define IGNORE_UNUSED(declaration)                                                \
   _Pragma ("GCC diagnostic push") _Pragma ("GCC diagnostic ignored \"-Wunused\"") \
+    _Pragma ("GCC diagnostic ignored \"-Wunused-result\"")                        \
       declaration _Pragma ("GCC diagnostic pop")
 #else
 #define IGNORE_UNUSED(declaration) declaration
@@ -44,29 +45,51 @@
 #if defined(__GNUC__) || defined(__clang__)
 #define IGNORE_WARNING(declaration)                                            \
   _Pragma ("GCC diagnostic push") _Pragma ("GCC diagnostic ignored \"-Wall\"") \
-      declaration _Pragma ("GCC diagnostic pop")
+    declaration _Pragma ("GCC diagnostic pop")
 #else
 #define IGNORE_WARNING(declaration) declaration
 #endif
 
 //~ Print formatted error message to stderr with red coloring
-#define eprintf(fmt, ...) \
-  fprintf (stderr, "\x1b[38;5;9m[ERROR] " fmt "\x1b[0m" __VA_OPT__ (, ) __VA_ARGS__)
+#define errpfmt(fmt, ...)                                                     \
+  /* NOLINT (cert-err33-c) */ fprintf (                                      \
+    stderr, "\x1b[38;5;9m[ERROR] " fmt "\x1b[0m" __VA_OPT__ (, ) __VA_ARGS__ \
+  )
 
-//~ Pop an element from the beginning of an array
-#define popf(c, v)                                                                    \
-  (c > 0 ? (--c, *v++)                                                                \
-         : (eprintf ("Trying to access a non-existent value\n"), exit (EXIT_FAILURE), \
-            (void *)0))
+//~ simply avoid adding stderr and nolint to use return value
+#define eprintf(fmt, ...) \
+  /* NOLINT (cert-err33-c) */ fprintf (stderr, fmt __VA_OPT__ (, ) __VA_ARGS__)
+
+#define die(fmt, ...)                            \
+  {                                              \
+    eprintf (fmt, __VA_ARGS__);  \
+    /* NOLINT (cert-err33-c) */ fflush (stderr); \
+    _exit (1);                                   \
+  }
+
+#define popf(c, v) /* NOLINT(concurrency-mt-unsafe) */           \
+  (c > 0 ? (--c, *v++)                                           \
+         : (errpfmt ("Trying to access a non-existent value\n"), \
+            exit (EXIT_FAILURE),                                 \
+            (typeof (*v))0))
+
+#define CHECK_OR_RETURN(expr, ret_val) \
+  if ((expr) < 0) return (ret_val)
+
+#define CHECK_OR_EXIT(expr, msg) \
+  if ((expr) < 0) {              \
+    perror (msg);                \
+    exit (EXIT_FAILURE);         \
+  }
 
 //~ Calculate the next power of 2 greater than or equal to n
-size_t next_power_of2(size_t n);
+size_t next_power_of2 (size_t n);
 
 #ifdef Z3_TOYS_IMPL
 // Implementation of utility functions
 
 //~ Calculate the next power of 2 greater than or equal to n
-size_t next_power_of2(size_t n) {
+size_t next_power_of2 (size_t n) {
   n--;
   n |= n >> 1;
   n |= n >> 2;
@@ -76,4 +99,4 @@ size_t next_power_of2(size_t n) {
   return n + 1;
 }
 
-#endif // Z3_TOYS_IMPL
+#endif  // Z3_TOYS_IMPL

@@ -7,10 +7,19 @@
 #include <string.h>
 #include <unistd.h>
 #include <yaml.h>
-#include <z3_toys.h>
 #include <z3_string.h>
+#include <z3_toys.h>
 
-const char* yaml_error_to_string (YamlErrorKind error) {
+#define LINE_BUFFER_MAX_LENGTH 256
+#define LINE_BUFFER_CLAMP(x)   ((x) > LINE_BUFFER_MAX_LENGTH ? LINE_BUFFER_MAX_LENGTH : (x))
+#define COPY_LINE(buf, off, len)         \
+  {                                      \
+    size_t _l = LINE_BUFFER_CLAMP (len); \
+    memcpy (buf, input + off, _l);       \
+    buf[_l] = '\0';                      \
+  }
+
+static const char* yaml_error_to_string (YamlErrorKind error) {
   switch (error) {
     case TAB_INDENTATION:
       return "TAB_INDENTATION";
@@ -35,7 +44,7 @@ const char* yaml_error_to_string (YamlErrorKind error) {
   }
 }
 
-bool parser_filler (String* res, void* ctx, char* item, size_t len) {
+static bool parser_filler (String* res, void* ctx, char* item, size_t len) {
   YamlError* ctxs = (YamlError*)ctx;
 
   switch (ctxs->kind) {
@@ -48,18 +57,11 @@ bool parser_filler (String* res, void* ctx, char* item, size_t len) {
         z3_pushl (res, ctxs->got, strlen (ctxs->got));
       return true;
     case WRONG_SYNTAX:
-      z3_pushl (res, ctxs->got, strlen (ctxs->got));
-      return true;
-    case KEY_REDEFINITION:                            // To be improved later on
-      z3_pushl (res, ctxs->got, strlen (ctxs->got));  // key name
-      return true;
+    case KEY_REDEFINITION:
     case UNDEFINED_ALIAS:
-      z3_pushl (res, ctxs->got, strlen (ctxs->got));  // alias name
-      return true;
     case REDEFINED_ALIAS:
-      z3_pushl (res, ctxs->got, strlen (ctxs->got));  // alias name
-      return true;
     case MISSING_VALUE:
+      // key or alias name, or token found
       z3_pushl (res, ctxs->got, strlen (ctxs->got));
       return true;
     case MISSING_COMMA:
@@ -71,7 +73,7 @@ bool parser_filler (String* res, void* ctx, char* item, size_t len) {
         z3_pushl (res, ctxs->got, strlen (ctxs->got));
       return true;
     default:
-      z3_pushl (res, "Unknown error occurred.", 23);
+      z3_pushlit (res, "Unknown error occurred.");
       return true;
   }
 }
@@ -79,88 +81,85 @@ bool parser_filler (String* res, void* ctx, char* item, size_t len) {
 void parser_error (Tokenizer* tokenizer, YamlError error) {
   // Error messages corresponding to YamlError enum
   const char* yaml_error_messages[] = {
-      "Tabs cannot be used for indentation.",
-      "Expected #{exp}, found #{got}.",
-      "Unexpected character.",
-      "#{} is redefined in the current context.",
-      "Alias #{} is undefined.",
-      "Alias #{} is already defined.",
-      "Missing value after key #{}.",
-      "Comma missing between elements in a collection.",
-      "Reached #{got} while looking for matching `#{exp}` quote."
+    "Tabs cannot be used for indentation.",
+    "Expected #{exp}, found #{got}.",
+    "Unexpected character.",
+    "#{} is redefined in the current context.",
+    "Alias #{} is undefined.",
+    "Alias #{} is already defined.",
+    "Missing value after key #{}.",
+    "Comma missing between elements in a collection.",
+    "Reached #{got} while looking for matching `#{exp}` quote."
   };
-  // Find the start of the error line
+
   const char* input = tokenizer->input;
-  size_t line_start = error.pos;
-  while (line_start > 0 && input[line_start - 1] != '\n') {
-    line_start--;
+
+  // find start of the error line
+  size_t errln_start = error.pos;
+  while (errln_start > 0 && input[errln_start - 1] != '\n') {
+    errln_start--;
   }
 
-  // Find the end of the error line
-  size_t line_end = error.pos;
-  while (input[line_end] != '\n' && input[line_end] != '\0') {
-    line_end++;
+  // find end of the error line
+  size_t errln_end = error.pos;
+  while (input[errln_end] != '\n' && input[errln_end] != '\0') {
+    errln_end++;
   }
 
-  // Extract the error line
-  size_t line_length = line_end - line_start;
-  char line_buffer[256];
-  if (line_length >= sizeof (line_buffer)) {
-    line_length = sizeof (line_buffer) - 1;
-  }
-  strncpy (line_buffer, input + line_start, line_length);
-  line_buffer[line_length] = '\0';
-
-  // Extract the previous line
-  size_t prev_start = line_start - 1;
-  while (prev_start > 0 && input[prev_start - 1] != '\n') {
-    prev_start--;
-  }
-  size_t prev_length = line_start - prev_start - 1;
-  char prev_buffer[256] = "";
-  if (prev_length > 0) {
-    strncpy (prev_buffer, input + prev_start, prev_length);
-    prev_buffer[prev_length] = '\0';
-  }
-
-  // Extract the next line
-  size_t next_start = line_end + 1;
-  size_t next_end = next_start;
-  while (input[next_end] != '\n' && input[next_end] != '\0') {
-    next_end++;
-  }
-  size_t next_length = next_end - next_start;
-  char next_buffer[256] = "";
-  if (next_length > 0) {
-    strncpy (next_buffer, input + next_start, next_length);
-    next_buffer[next_length] = '\0';
-  }
-
-  int column = (int)(error.pos - line_start);
-
-  fprintf (stderr, "YamlError::%s\n", yaml_error_to_string (error.kind));
-
-  if (prev_length > 0) fprintf (stderr, "%3zu |%s\n", tokenizer->line - 1, prev_buffer);
-
-  fprintf (stderr, "%3zu |%s\n", tokenizer->line, line_buffer);
-
-  char* carets = malloc (error.len + column + 2);
-  memset (carets, ' ', column);
-  memset (carets + column, '^', error.len);
-  carets[error.len + column] = '\n';
-  carets[error.len + column + 1] = '\0';
+  size_t errln_len = errln_end - errln_start;
 
   String err_msg = z3_strcpy (yaml_error_messages[error.kind]);
   String ferr_msg = z3_interp (&err_msg, parser_filler, &error);
 
-  IGNORE_UNUSED (write (STDERR_FILENO, "    |", 5));
-  IGNORE_UNUSED (write (STDERR_FILENO, carets, error.len + column + 1));
+  eprintf ("YamlError::%s\n", yaml_error_to_string (error.kind));
+  if (errln_len < 1 || errln_len > LINE_BUFFER_MAX_LENGTH) {
+    eprintf (
+      "anvil.yaml:%zu:%zu -> %s\n", tokenizer->line, error.pos - errln_start, ferr_msg.chr
+    );
+    goto drop_all_return;
+  }
+  char line_buffer[LINE_BUFFER_MAX_LENGTH];
 
-  if (next_length > 0) fprintf (stderr, "%3zu |%s\n", tokenizer->line + 1, next_buffer);
-  fprintf (stderr, "\n%s\n", ferr_msg.chr);
+  // find previous line start
+  size_t prevln_start = errln_start - 1;
+  while (prevln_start > 0 && input[prevln_start - 1] != '\n') {
+    prevln_start--;
+  }
+  size_t prevln_len = errln_start - prevln_start - 1;
 
+  if (prevln_len > 0 && prevln_len < LINE_BUFFER_MAX_LENGTH) {
+    COPY_LINE (line_buffer, prevln_start, prevln_len);
+    eprintf ("%3zu |%s\n", tokenizer->line - 1, line_buffer);
+  }
+
+  // error line
+  COPY_LINE (line_buffer, errln_start, errln_len)
+  eprintf ("%3zu |%s\n", tokenizer->line, line_buffer);
+
+  size_t column = error.pos - errln_start;
+  memset (line_buffer, ' ', column);
+  memset (line_buffer + column, '^', error.len);
+  line_buffer[error.len + column] = '\0';
+  eprintf ("    |%s\n", line_buffer);
+
+  // Extract the next line
+  size_t nextln_start = errln_end + 1;
+  size_t nextln_end = nextln_start;
+  while (input[nextln_end] != '\n' && input[nextln_end] != '\0') {
+    nextln_end++;
+  }
+
+  size_t nextln_len = nextln_end - nextln_start;
+  if (nextln_len > 0 && nextln_len < LINE_BUFFER_MAX_LENGTH) {
+    COPY_LINE (line_buffer, nextln_start, nextln_len);
+    eprintf ("%3zu |%s\n", tokenizer->line + 1, line_buffer);
+  }
+
+  eprintf ("\n%s\n", ferr_msg.chr);
+
+drop_all_return:
   z3_drops (&err_msg);
-  free (carets);
   z3_drops (&ferr_msg);
-  exit (EXIT_FAILURE);
+  fflush (stderr);  // NOLINT (cert-err33-c)
+  _exit (EXIT_FAILURE);
 }

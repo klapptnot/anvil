@@ -29,45 +29,47 @@
 typedef struct {
   size_t max; /**< Maximum capacity */
   size_t len; /**< Current length (excluding null terminator) */
-  char *chr;  /**< Pointer to the character array */
+  char* chr;  /**< Pointer to the character array */
 } String;
 
 //~ Print debug information about a string
-#define z3_str_dbg(s)                                                                         \
-  printf (                                                                                    \
-      #s " = String {\n  len: %zu,\n  max: %zu,\n  chr: '%s'\n}\n", (s).len, (s).max, (s).chr \
+#define z3_str_dbg(s)                                                                       \
+  printf (                                                                                  \
+    #s " = String {\n  len: %zu,\n  max: %zu,\n  chr: '%s'\n}\n", (s).len, (s).max, (s).chr \
   );
+
+#define z3_pushlit(vec, lit) z3_pushl (vec, lit, sizeof (lit) - 1)
 
 //~ Create a new empty String, with at least `min` capacity
 String z3_str (size_t min);
 
 //~ Create a new String from a C-style string
 //! This does look for `\0` terminator
-String z3_strcpy (const char *s);
+String z3_strcpy (const char* s);
 
 //~ Create a duplicate of an existing String
-String z3_strdup (const String *str);
+String z3_strdup (const String* str);
 
 //~ Append a single char to a String
-void z3_pushc (String *str, const char s);
+void z3_pushc (String* str, char s);
 
 //~ Append a C-style string to a String
-void z3_pushl (String *str, const char *s, size_t l);
+void z3_pushl (String* str, const char* s, size_t l);
 
 //~ Ensure String is null terminated
-void z3_ensure0 (String *str);
+void z3_ensure0 (String* str);
 
 //~ Ensure String has enough allocated memory
-void z3_reserve (String *str, size_t additional);
+void z3_reserve (String* str, size_t additional);
 
 //~ Free the memory used by a String
-void z3_drops (String *str);
+void z3_drops (String* str);
 
 //~ Escape a string, converting control characters to escape sequences
-String z3_escape (const char *input, size_t len);
+String z3_escape (const char* input, size_t len);
 
 //~ Unescape a string, converting escape sequences to their respective characters
-String z3_unescape (const char *input, size_t len);
+String z3_unescape (const char* input, size_t len);
 
 //~ Interpolate a template string by replacing placeholders with values
 //
@@ -79,12 +81,12 @@ String z3_unescape (const char *input, size_t len);
 //~ Note: The original template string is not modified. A new `String` is created with the
 //  interpolated values.
 String z3_interp (
-    const String *templt, bool (*filler) (String *, void *, char *, size_t), void *ctx
+  const String* tmplt, bool (*filler) (String*, void*, char*, size_t), void* ctx
 );
 
 #ifdef Z3_TOYS_SCOPED
 //~ Cleanup function for String (used with attribute cleanup)
-void __cleanup_String (String *s);
+void __cleanup_String (String* s);
 
 //~ Define a String with automatic cleanup
 #define ScopedString __attribute__ ((cleanup (z3_drops))) String
@@ -92,9 +94,10 @@ void __cleanup_String (String *s);
 
 #ifdef Z3_STRING_IMPL
 #include <ctype.h>
+
 #include "z3_toys.h"
 
-void z3_reserve (String *str, size_t additional) {
+void z3_reserve (String* str, size_t additional) {
   if (!str || !str->chr) return;
 
   if (str->len + additional + 1 > str->max) {
@@ -103,21 +106,18 @@ void z3_reserve (String *str, size_t additional) {
     }
 
     str->chr = realloc (str->chr, str->max);
-    if (str->chr == NULL) {
-      eprintf ("String realloc: requested %zu bytes\n", str->max);
-      exit (EXIT_FAILURE);
-    }
+    if (str->chr == nullptr) die ("String realloc: requested %zu bytes\n", str->max);
   }
 }
 
-void z3_ensure0 (String *str) {
+void z3_ensure0 (String* str) {
   if (!str || !str->chr) return;
 
   if (str->chr[str->len] == '\0') return;
   str->chr[str->len] = '\0';
 }
 
-void z3_pushc (String *str, char c) {
+void z3_pushc (String* str, char c) {
   if (!str || !str->chr) return;
 
   z3_reserve (str, 1);
@@ -126,7 +126,7 @@ void z3_pushc (String *str, char c) {
   str->chr[str->len] = '\0';
 }
 
-void z3_pushl (String *str, const char *s, size_t l) {
+void z3_pushl (String* str, const char* s, size_t l) {
   if (!str || !str->chr || !s || l == 0) return;
 
   z3_reserve (str, l);
@@ -146,13 +146,13 @@ String z3_str (size_t min) {
   return str;
 }
 
-String z3_strcpy (const char *s) {
+String z3_strcpy (const char* s) {
   String str = {0};
   size_t len = strlen (s) + 1;
   str.max = ((len & (len - 1)) == 0) ? len : next_power_of2 (len);
   str.len = len - 1;
   str.chr = malloc (str.max);
-  if (str.chr == NULL) {
+  if (str.chr == nullptr) {
     fprintf (stderr, "failed to allocate memory for string\n");
     exit (EXIT_FAILURE);
   }
@@ -161,7 +161,7 @@ String z3_strcpy (const char *s) {
   return str;
 }
 
-String z3_strdup (const String *str) {
+String z3_strdup (const String* str) {
   String s = {0};
   if (!str || !str->chr) return s;
 
@@ -177,17 +177,17 @@ String z3_strdup (const String *str) {
   return s;
 }
 
-void z3_drops (String *str) {
+void z3_drops (String* str) {
   if (!str || !str->chr) return;
 
   free (str->chr);
-  str->chr = NULL;
+  str->chr = nullptr;
   str->len = 0;
   str->max = 0;
 }
 
 String z3_interp (
-    const String *tmplt, bool (*filler) (String *, void *, char *, size_t), void *ctx
+  const String* tmplt, bool (*filler) (String*, void*, char*, size_t), void* ctx
 ) {
   String result = z3_str (32);
 
@@ -218,7 +218,7 @@ String z3_interp (
     if (tmplt->chr[path_end] != '}' || path_end >= tmplt->len) {
       // No closing '}' found, treat as literal text
       size_t path_len = path_end - path_start + 2;
-      char *path = malloc (path_len + 1);
+      char* path = malloc (path_len + 1);
       if (path) {
         memcpy (path, tmplt->chr + path_start - 2, path_len);
         path[path_len] = '\0';
@@ -229,7 +229,7 @@ String z3_interp (
       continue;
     }
     size_t path_len = path_end - path_start;
-    char *path = (char *)(tmplt->chr + path_start);
+    char* path = (char*)(tmplt->chr + path_start);
 
     if (!filler (&result, ctx, path, path_len)) {
       z3_pushl (&result, tmplt->chr + i, path_len + 3);  // push entire #{...}
@@ -242,14 +242,14 @@ String z3_interp (
   return result;
 }
 
-String z3_escape (const char *input, size_t len) {
+String z3_escape (const char* input, size_t len) {
   char hex_digits[] = "0123456789abcdef";
   String s = z3_str (32);
   size_t l = 0;
 
   // loop until `\0`, or until length
   while (l < len && *input) {
-    unsigned char c = *input;
+    unsigned char c = (unsigned char)*input;
     switch (c) {
       case '\a':
         z3_pushl (&s, "\\a", 2);
@@ -292,7 +292,7 @@ String z3_escape (const char *input, size_t len) {
           z3_pushc (&s, hex_digits[(c >> 4) & 0xF]);
           z3_pushc (&s, hex_digits[c & 0xF]);
         } else {
-          z3_pushc (&s, c);
+          z3_pushc (&s, (char)c);
         }
         break;
     }
@@ -303,7 +303,7 @@ String z3_escape (const char *input, size_t len) {
   return s;
 }
 
-String z3_unescape (const char *input, size_t len) {
+String z3_unescape (const char* input, size_t len) {
   String s = z3_str (32);
   size_t l = 0;
 
@@ -371,7 +371,7 @@ String z3_unescape (const char *input, size_t len) {
             byte_value |= (c - 'a' + 10);
           else if (c >= 'A' && c <= 'F')
             byte_value |= (c - 'A' + 10);
-          z3_pushc (&s, byte_value);
+          z3_pushc (&s, (char)byte_value);
 
           break;
         }
@@ -393,7 +393,7 @@ String z3_unescape (const char *input, size_t len) {
 }
 
 #ifdef Z3_TOYS_SCOPED
-void __cleanup_String (String *s) {
+void __cleanup_String (String* s) {
   z3_drops (s);
 }
 #endif  // Z3_TOYS_SCOPED

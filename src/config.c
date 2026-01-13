@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <yaml.h>
 #include <z3_hashmap.h>
 #include <z3_vector.h>
@@ -78,8 +79,8 @@ void dset_profile_config (Z3HashMap* pconf, Node* node) {
     if (!key || !val || val->kind != NODE_SEQUENCE) continue;
 
     Z3Vector* flags = z3_new_vec (char*);
-    for (size_t i = 0; i < val->sequence.size; i++) {
-      Node* vi = val->sequence.items[i];
+    for (size_t j = 0; j < val->sequence.size; j++) {
+      Node* vi = val->sequence.items[j];
       if (vi && vi->kind == NODE_STRING) {
         z3_push (*flags, vi->string);
       }
@@ -97,7 +98,7 @@ void dset_target_config (BuildTarget* tconf, Node* node) {
     return;
   }
   tconf->count = node->sequence.size;
-  tconf->target = malloc (sizeof (TargetConfig) * node->sequence.size);
+  tconf->target = (TargetConfig**)malloc (sizeof (TargetConfig) * node->sequence.size);
   for (size_t i = 0; i < node->sequence.size; i++) {
     TargetConfig* tari = malloc (sizeof (TargetConfig));
     Node* tnode = node->sequence.items[i];
@@ -225,4 +226,83 @@ void dset_anvil_config (AnvilConfig* conf, Node* node) {
   } else {
     conf->profiles = nullptr;
   }
+}
+
+void free_target_config (BuildTarget* tconf) {
+  if (!tconf) return;
+
+  if (tconf->target) {
+    for (size_t i = 0; i < tconf->count; i++) {
+      TargetConfig* tari = tconf->target[i];
+      if (tari) {
+        // name, type, main are owned by Node tree
+        if (tari->target) {
+          // target array elements are owned by Node tree
+          free ((void*)tari->target);
+        }
+        free (tari);
+      }
+    }
+    free ((void*)tconf->target);
+  }
+
+  free (tconf);
+}
+
+void free_profile_config (Z3HashMap* pconf) {
+  if (!pconf) return;
+
+  // Iterate through hashmap and free each Z3Vector
+  Z3HashMapIterator it = z3_hashmap_iterator (pconf);
+  while (z3_hashmap_iter_next (&it)) {
+    Z3Vector* flags = (Z3Vector*)it.val;
+    // Vector elements are owned by Node tree
+    if (flags) z3_drop_vec (*flags);
+  }
+
+  z3_hashmap_drop (pconf);
+}
+
+void free_build_config (BuildConfig* bconf) {
+  if (!bconf) return;
+
+  // compiler and cstd are owned by Node tree
+
+  if (bconf->macros) {
+    // Hashmap values are owned by Node tree
+    z3_hashmap_drop_shallow (bconf->macros);
+  }
+
+  if (bconf->arguments) {
+    Z3HashMapIterator it = z3_hashmap_iterator (bconf->arguments);
+    while (z3_hashmap_iter_next (&it)) {
+      ArgumentConfig* argconf = (ArgumentConfig*)it.val;
+      if (argconf) {
+        free ((void*)argconf->commands);
+      }
+    }
+    z3_hashmap_drop (bconf->arguments);
+  }
+
+  // All string fields are owned by the Node tree, drop the map
+  if (bconf->deps) free (bconf->deps);
+
+  free (bconf);
+}
+
+// Free config tree, all values are owned by Node tree
+void free_anvil_config (AnvilConfig* conf) {
+  if (!conf) return;
+
+  // package, version, author, description are owned by Node tree
+
+  if (conf->workspace) free (conf->workspace);
+
+  if (conf->targets) free_target_config (conf->targets);
+
+  if (conf->build) free_build_config (conf->build);
+
+  if (conf->profiles) free_profile_config (conf->profiles);
+
+  free (conf);
 }

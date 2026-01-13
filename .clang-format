@@ -2,6 +2,7 @@
 Language: Cpp
 BasedOnStyle: Google
 IndentWidth: 2
+ContinuationIndentWidth: 2
 ColumnLimit: 96
 AccessModifierOffset: -4
 AllowShortFunctionsOnASingleLine: Empty
@@ -9,7 +10,7 @@ BreakBeforeBraces: Attach
 NamespaceIndentation: All
 PointerAlignment: Left
 SortIncludes: true
-SpaceAfterTemplateKeyword: false
+SpaceBeforeCpp11BracedList: true
 SpaceBeforeParens: Always
 # SpaceBeforeParensOptions:
 #   AfterControlStatements: true
@@ -57,10 +58,14 @@ AlignAfterOpenBracket: BlockIndent
 AllowShortEnumsOnASingleLine: false
 AllowShortBlocksOnASingleLine: Empty
 
-BinPackArguments: true
-BinPackParameters: false
-BreakAfterAttributes: Never
+BinPackArguments: false
+BinPackLongBracedList: false
+BinPackParameters: OnePerLine
+BreakAfterAttributes: Leave
+# BreakAfterOpenBracketBracedList: true # clang-format v22
 BreakStringLiterals: true
+
+PackConstructorInitializers: Never
 
 # IndentPPDirectives: BeforeHash
 IndentGotoLabels: true

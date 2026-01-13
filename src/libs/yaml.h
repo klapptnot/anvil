@@ -106,6 +106,7 @@ typedef enum {
 // Structured error information for detailed error reporting
 typedef struct {
   YamlErrorKind kind;  // Type of error encountered
+  int _padding;        // hmm
   const char* exp;     // Expected token/context
   const char* got;     // Actual token/context received
   size_t pos;          // Error position in input
@@ -125,6 +126,7 @@ typedef enum {
 // Token representation with detailed metadata
 typedef struct {
   TokenKind kind;  // Type of token
+  int _padding;    // hmm
   size_t start;    // Starting position in input
   size_t length;   // Token length
   size_t line;     // Line number
@@ -156,7 +158,7 @@ typedef struct {
 
 struct Node {
   NodeKind kind;        // Type of node
-  size_t rcount;        // Reference count (Alias reference count)
+  unsigned int rcount;  // Reference count (Alias reference count)
   union {
     char* string;       // String node value
     double number;      // Numeric node value
@@ -180,7 +182,7 @@ typedef struct {
 
 // Tokenizer state tracking for parsing
 typedef struct {
-  int root_mark;
+  size_t root_mark;       // boolean, size_t just for padding
   const char* input;      // Input YAML string
   size_t cpos;            // Current parsing position
   size_t line;            // Current line number
@@ -194,50 +196,8 @@ typedef struct {
   Tokenizer t;
 } YamlParser;
 
-// Create a token with specified metadata
-Token create_token (TokenKind kind, size_t start, size_t length, size_t line, size_t column);
-
 // Terminate parsing with a detailed error message
 void parser_error (Tokenizer* tokenizer, YamlError error) __attribute__ ((__noreturn__));
-
-// Return current token without consuming it
-Token peek_token (Tokenizer* tokenizer);
-
-// Return the next token, directly from input
-Token next_token (Tokenizer* tokenizer);
-
-// Skip over whitespace characters in the input
-void skip_whitespace (Tokenizer* tokenizer);
-
-// Read and return the next character from the input
-void read_char (Tokenizer* tokenizer);
-
-// Parse a YAML mapping (key-value dictionary)
-Node* parse_map (Tokenizer* tokenizer);
-
-// Parse a YAML sequence (array/list)
-Node* parse_seq (Tokenizer* tokenizer);
-
-// Parse any valid YAML value (string, number, map, sequence, etc.)
-Node* parse_value (Tokenizer* tokenizer);
-
-// Extract the string value of a token from the input
-char* token_value (Tokenizer* tokenizer, Token token) __attribute__ ((malloc));
-
-// Parse an alias reference to a previously defined anchor
-Node* parse_alias (Tokenizer* tokenizer, Token token);
-
-// Parse a string token (both quoted and unquoted)
-Node* parse_string (Tokenizer* tokenizer, Token token);
-
-// Parse a numeric value token
-Node* parse_number (Tokenizer* tokenizer, Token token);
-
-// Parse a boolean value token
-Node* parse_boolean (Tokenizer* tokenizer, Token token);
-
-// Create a new node with a specified type
-Node* create_node (NodeKind kind);
 
 // Recursively free memory allocated for a node
 void free_node (Node* node);
@@ -256,4 +216,3 @@ void free_yaml (Node* node);
 
 // Retrieve an arbitrary node from a map by its key
 Node* map_get_node (Node* node, const char* key);
-

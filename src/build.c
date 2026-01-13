@@ -8,10 +8,14 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 #include <z3_string.h>
 #include <z3_vector.h>
-#include "config.h"
+#include "z3_toys.h"
+#include "build.h"
 
 bool target_needs_rebuild (String *target, Z3Vector deps) {
   struct stat target_stat;
@@ -30,11 +34,10 @@ bool target_needs_rebuild (String *target, Z3Vector deps) {
     struct stat dep_stat;
 
     if (stat (dep->chr, &dep_stat) != 0) {
-      eprintf (
+      die (
           "Dependency '%s' for target '%s' doesn't exist or can't be accessed: %s\n", dep->chr,
           target->chr, strerror (errno)
       );
-      exit (1);
     }
 
     // dependency newer than target
@@ -46,28 +49,28 @@ bool target_needs_rebuild (String *target, Z3Vector deps) {
   return false;
 }
 
-void parse_dependencies (String *str, Z3Vector *deps) {
+void parse_dependencies (String *rule_str, Z3Vector *deps) {
   size_t i = 0;
-  while (i < str->len && str->chr[i] != ':') i++;
-  if (i >= str->len) return;
+  while (i < rule_str->len && rule_str->chr[i] != ':') i++;
+  if (i >= rule_str->len) return;
 
   // past the `:`
   i++;
 
   size_t start = 0;
-  while (i < str->len) {
+  while (i < rule_str->len) {
     // skip spaces
-    while (i < str->len && isspace (str->chr[i])) i++;
-    if (i >= str->len) break;
+    while (i < rule_str->len && isspace (rule_str->chr[i])) i++;
+    if (i >= rule_str->len) break;
 
     start = i;
-    while (i < str->len && !isspace (str->chr[i])) i++;
+    while (i < rule_str->len && !isspace (rule_str->chr[i])) i++;
 
     size_t len = i - start;
     if (len > 0) {
       String s = z3_str (len);
 
-      z3_pushl (&s, &str->chr[start], len);
+      z3_pushl (&s, &rule_str->chr[start], len);
       z3_push (*deps, s);
     }
   }
