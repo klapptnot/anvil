@@ -24,10 +24,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 //~ Hash map structure for string key-value pairs
 typedef struct {
   struct Z3HashMapEntry* entries;

@@ -64,7 +64,7 @@ function main {
 
   readonly -a args=(
     "${@}"
-    "${THIS_PARENT}/build.yaml"
+    "${THIS_PARENT}/anvil.yaml"
   )
 
   if [ "${operation}" == 'run' ]; then
