@@ -594,7 +594,7 @@ static Node* parse_map (Tokenizer* tokenizer) {
 
     char* key = token_value (tokenizer, token);
 
-    if (!memcmp (key, "<<\0", 3)) {
+    if (token.length == 2 && !memcmp (key, "<<", 2)) {
       char c = skip_all_whitespace (tokenizer);
       free (key);
 

@@ -16,15 +16,13 @@
  * Requires:
  *   - C23 Standard (Use -std=c23).
  *   - z3_toys.h
- *
  */
 #pragma once
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "z3_toys.h"
+#include <z3_toys.h>
 
 #define Z3_VECTOR_INITIAL_CAPACITY 32
 
@@ -41,9 +39,6 @@ typedef struct {
   (Z3Vector) {                                               \
     .max = 0, .len = 0, .esz = sizeof (type), .val = nullptr \
   }
-
-// Define a heap-allocated vector function
-extern Z3Vector* z3_vec_heap (size_t element_size);
 
 // Helper macro to make the element size specification cleaner
 #define z3_new_vec(type) z3_vec_heap (sizeof (type))
@@ -111,6 +106,9 @@ extern Z3Vector* z3_vec_heap (size_t element_size);
     }                                        \
     z3_drop_vec (vec);                       \
   }
+
+// A 100% heap-allocated vector
+Z3Vector* z3_vec_heap (size_t element_size);
 
 #ifdef Z3_TOYS_SCOPED
 //~ Cleanup function for generic Z3Vector (used with attribute cleanup)

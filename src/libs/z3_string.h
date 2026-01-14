@@ -16,7 +16,6 @@
  * Requires:
  *   - C23 Standard (Use -std=c23).
  *   - z3_toys.h
- *
  */
 #pragma once
 
@@ -24,6 +23,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <z3_toys.h>
 
 //~ Heap-allocated growable string
 typedef struct {
@@ -94,8 +94,6 @@ void __cleanup_String (String* s);
 
 #ifdef Z3_STRING_IMPL
 #include <ctype.h>
-
-#include "z3_toys.h"
 
 void z3_reserve (String* str, size_t additional) {
   if (!str || !str->chr) return;
