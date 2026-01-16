@@ -26,7 +26,7 @@ String float_to_str (float num);
 // z3_dropfn (String, z3_drops);
 
 // static bool fill (String* s, void* ctx, const char* path, size_t /*unused*/) {
-//   Z3Vector* any = ctx;
+//   VectorZ3* any = ctx;
 //   size_t i = (size_t)strtol (path, nullptr, 10);  // NOLINT(readability-magic-numbers)
 //   if (i > any->len) return false;
 //   String* as = z3_get (*any, i);
@@ -120,7 +120,7 @@ static void print_anvil_config (const AnvilConfig* config) {
     Z3HashMapIterator it;
     z3_hashmap_iter_init (&it, config->profiles);
     while (z3_hashmap_iter_next (&it)) {
-      Z3Vector* profc = it.val;
+      VectorZ3* profc = it.val;
       printf ("  %s (%zu):\n", it.key, profc->len);
       for (size_t i = 0; i < profc->len; i++) {
         printf ("      [%zu] %s\n", i, *(char**)z3_get (*profc, i));

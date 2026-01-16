@@ -5,6 +5,8 @@
 
 #include <stdint.h>
 #include <z3_toys.h>
+#include <z3_string.h>
+#include <z3_vector.h>
 #include "config.h"
 
 typedef enum {
@@ -28,7 +30,7 @@ typedef struct {
 
 typedef struct {
   RuntimeHook* value;
-  Vector* chest;
+  VectorZ3* chest;
 } HashItem;
 
 // linked list of collitions
@@ -39,7 +41,7 @@ typedef struct {
 } CollidedItem;
 
 // Load all hooks from folder and config
-Vector hooks_get_list(AnvilConfig config);
+VectorZ3 hooks_get_list(AnvilConfig config);
 
 // Run and get result of a hook by its name.
 String hooks_run(String name);

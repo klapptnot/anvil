@@ -546,7 +546,7 @@ static Node* parse_seq (Tokenizer* tokenizer) {
 static Node* parse_map (Tokenizer* tokenizer) {
   Node* node = create_node (NODE_MAP);
 
-  Z3Vector merge_maps = z3_vec (size_t);
+  VectorZ3 merge_maps = z3_vec (size_t);
   TokenKind expected_next = TOKEN_UNKNOWN;
   while (true) {
     Token token = next_token (tokenizer);

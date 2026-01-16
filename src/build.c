@@ -17,7 +17,7 @@
 #include "z3_toys.h"
 #include "build.h"
 
-bool target_needs_rebuild (String *target, Z3Vector deps) {
+bool target_needs_rebuild (String *target, VectorZ3 deps) {
   struct stat target_stat;
 
   // target doesn't exist
@@ -49,7 +49,7 @@ bool target_needs_rebuild (String *target, Z3Vector deps) {
   return false;
 }
 
-void parse_dependencies (String *rule_str, Z3Vector *deps) {
+void parse_dependencies (String *rule_str, VectorZ3 *deps) {
   size_t i = 0;
   while (i < rule_str->len && rule_str->chr[i] != ':') i++;
   if (i >= rule_str->len) return;
@@ -76,6 +76,6 @@ void parse_dependencies (String *rule_str, Z3Vector *deps) {
   }
 }
 
-// void get_make_dependencies (BuildConfig *config, Z3Vector *deps) {
+// void get_make_dependencies (BuildConfig *config, VectorZ3 *deps) {
 //   //
 // }

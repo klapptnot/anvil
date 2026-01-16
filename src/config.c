@@ -78,7 +78,7 @@ void dset_profile_config (Z3HashMap* pconf, Node* node) {
 
     if (!key || !val || val->kind != NODE_SEQUENCE) continue;
 
-    Z3Vector* flags = z3_new_vec (char*);
+    VectorZ3* flags = z3_new_vec (char*);
     for (size_t j = 0; j < val->sequence.size; j++) {
       Node* vi = val->sequence.items[j];
       if (vi && vi->kind == NODE_STRING) {
@@ -255,7 +255,7 @@ void free_profile_config (Z3HashMap* pconf) {
   // Iterate through hashmap and free each Z3Vector
   Z3HashMapIterator it = z3_hashmap_iterator (pconf);
   while (z3_hashmap_iter_next (&it)) {
-    Z3Vector* flags = (Z3Vector*)it.val;
+    VectorZ3* flags = (VectorZ3*)it.val;
     // Vector elements are owned by Node tree
     if (flags) z3_drop_vec (*flags);
   }
