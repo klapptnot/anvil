@@ -31,60 +31,60 @@ typedef struct {
   uint64_t hash;
   char* key;
   void* val;
-} Z3HashMapEntry;
+} HashMapEntry;
 
 //~ Auto-growing HashMap<String, &T>
 typedef struct {
-  Z3HashMapEntry* beds;
+  HashMapEntry* beds;
   size_t max;
   size_t len;
   size_t* bfs;
-} Z3HashMap;
+} HashMap;
 
 typedef struct {
-  Z3HashMap* map;  // pointer to the map being iterated
-  size_t idx;      // current index in the table
-  char* key;       // current key
-  void* val;       // current value
-} Z3HashMapIterator;
+  HashMap* map;  // pointer to the map being iterated
+  size_t idx;    // current index in the table
+  char* key;     // current key
+  void* val;     // current value
+} HashMapIterator;
 
 #define z3_hashmap_iterator(m)                           \
-  (Z3HashMapIterator) {                                  \
+  (HashMapIterator) {                                    \
     .map = (m), .idx = 0, .key = nullptr, .val = nullptr \
   }
 
 //~ Create a new empty hashmap with default capacity
-Z3HashMap* z3_hashmap_create (void);
+HashMap* z3_hashmap_create (void);
 
 //~ Insert or update a key-value pair in the hashmap
 //! The key is duplicated internally, do not inline strdup
 //! Updating a value does NOT replace the key; again, no strdup
-void z3_hashmap_put (Z3HashMap* map, const char* key, void* value);
+void z3_hashmap_put (HashMap* map, const char* key, void* value);
 
 //~ Retrieve a value by its key
 //! Returns NULL if key doesn't exist
-const char* z3_hashmap_get (Z3HashMap* map, const char* key);
+const char* z3_hashmap_get (HashMap* map, const char* key);
 
 //~ Remove a key-value pair from the hashmap
-void z3_hashmap_remove (Z3HashMap* map, const char* key);
+void z3_hashmap_remove (HashMap* map, const char* key);
 
 //~ Check if a key exists in the hashmap
 //! Returns non-zero if key exists, zero otherwise
-bool z3_hashmap_has (Z3HashMap* map, const char* key);
+bool z3_hashmap_has (HashMap* map, const char* key);
 
 //~ Free all memory associated with the hashmap
-void z3_hashmap_drop (Z3HashMap* map);
+void z3_hashmap_drop (HashMap* map);
 
 //~ Free the hashmap memory, leaving values orphaned
-void z3_hashmap_drop_shallow (Z3HashMap* map);
+void z3_hashmap_drop_shallow (HashMap* map);
 
 //~ Initializes an iterator for the given hash map
 //! Must be called before using z3_hashmap_iter_next
-void z3_hashmap_iter_init (Z3HashMapIterator* it, Z3HashMap* map);
+void z3_hashmap_iter_init (HashMapIterator* it, HashMap* map);
 
 //~ Advances the iterator to the next valid entry in the map
 //! Returns true if an entry is found; false if iteration is complete
-bool z3_hashmap_iter_next (Z3HashMapIterator* it);
+bool z3_hashmap_iter_next (HashMapIterator* it);
 
 #ifdef Z3_HASHMAP_IMPL
 
@@ -124,26 +124,26 @@ static void z3_hashmap_set_used (size_t* bf, size_t pos, bool val) {
   }
 }
 
-Z3HashMap* z3_hashmap_create (void) {
-  Z3HashMap* map = (Z3HashMap*)malloc (sizeof (Z3HashMap));
+HashMap* z3_hashmap_create (void) {
+  HashMap* map = (HashMap*)malloc (sizeof (HashMap));
   map->max = Z3_HASHMAP_INITIAL_CAPACITY;
   map->len = 0;
-  map->beds = (Z3HashMapEntry*)calloc (map->max, sizeof (Z3HashMapEntry));
+  map->beds = (HashMapEntry*)calloc (map->max, sizeof (HashMapEntry));
   map->bfs = calloc (Z3_HASHMAP_BITFLAG_SIZE, 1);
   return map;
 }
 
-void z3_hashmap_put (Z3HashMap* map, const char* key, void* value) {
+void z3_hashmap_put (HashMap* map, const char* key, void* value) {
   if (!key || !value) return;
 
   if (map->len >= map->max * 3 / 4) {
     size_t old_capacity = map->max;
-    Z3HashMapEntry* old_beds = map->beds;
+    HashMapEntry* old_beds = map->beds;
     size_t* exes = map->bfs;
 
     map->len = 0;
     map->max *= 2;
-    map->beds = (Z3HashMapEntry*)calloc (map->max, sizeof (Z3HashMapEntry));
+    map->beds = (HashMapEntry*)calloc (map->max, sizeof (HashMapEntry));
     size_t new_cap = /* round up */
       (map->max + (Z3_HASHMAP_BITFLAG_CAPACITY - 1)) / Z3_HASHMAP_BITFLAG_CAPACITY;
 
@@ -157,7 +157,7 @@ void z3_hashmap_put (Z3HashMap* map, const char* key, void* value) {
         for (size_t j = 0; j < map->max; ++j) {
           size_t idx = z3_hashmap__probe (hash, j, map->max);
           if (!z3_hashmap_pos_used (map->bfs, idx)) {
-            Z3HashMapEntry* entry = &map->beds[idx];
+            HashMapEntry* entry = &map->beds[idx];
             entry->key = old_beds[i].key;
             entry->val = old_beds[i].val;
             entry->hash = hash;
@@ -175,7 +175,7 @@ void z3_hashmap_put (Z3HashMap* map, const char* key, void* value) {
   uint64_t hash = z3_hashmap__hash_str (key);
   for (size_t i = 0; i < map->max; ++i) {
     size_t idx = z3_hashmap__probe (hash, i, map->max);
-    Z3HashMapEntry* entry = &map->beds[idx];
+    HashMapEntry* entry = &map->beds[idx];
     bool is_used = z3_hashmap_pos_used (map->bfs, idx);
     if (!is_used || (entry->key && strcmp (entry->key, key) == 0)) {
       z3_hashmap_set_used (map->bfs, idx, true);
@@ -190,12 +190,12 @@ void z3_hashmap_put (Z3HashMap* map, const char* key, void* value) {
   }
 }
 
-const char* z3_hashmap_get (Z3HashMap* map, const char* key) {
+const char* z3_hashmap_get (HashMap* map, const char* key) {
   if (!key) return nullptr;
   uint64_t hash = z3_hashmap__hash_str (key);
   for (size_t i = 0; i < map->max; ++i) {
     size_t idx = z3_hashmap__probe (hash, i, map->max);
-    Z3HashMapEntry* entry = &map->beds[idx];
+    HashMapEntry* entry = &map->beds[idx];
     bool is_used = z3_hashmap_pos_used (map->bfs, idx);
     if ((int)is_used && (entry->key && strcmp (entry->key, key) == 0)) {
       return entry->val;
@@ -205,12 +205,12 @@ const char* z3_hashmap_get (Z3HashMap* map, const char* key) {
   return nullptr;
 }
 
-void z3_hashmap_remove (Z3HashMap* map, const char* key) {
+void z3_hashmap_remove (HashMap* map, const char* key) {
   if (!key) return;
   uint64_t hash = z3_hashmap__hash_str (key);
   for (size_t i = 0; i < map->max; ++i) {
     size_t idx = z3_hashmap__probe (hash, i, map->max);
-    Z3HashMapEntry* entry = &map->beds[idx];
+    HashMapEntry* entry = &map->beds[idx];
     bool is_used = z3_hashmap_pos_used (map->bfs, idx);
     if ((int)is_used && (entry->key && strcmp (entry->key, key) == 0)) {
       z3_hashmap_set_used (map->bfs, idx, false);
@@ -224,18 +224,18 @@ void z3_hashmap_remove (Z3HashMap* map, const char* key) {
   }
 }
 
-bool z3_hashmap_has (Z3HashMap* map, const char* key) {
+bool z3_hashmap_has (HashMap* map, const char* key) {
   return z3_hashmap_get (map, key) != nullptr;
 }
 
-void z3_hashmap_iter_init (Z3HashMapIterator* it, Z3HashMap* map) {
+void z3_hashmap_iter_init (HashMapIterator* it, HashMap* map) {
   it->map = map;
   it->idx = 0;
   it->key = nullptr;
   it->val = nullptr;
 }
 
-bool z3_hashmap_iter_next (Z3HashMapIterator* it) {
+bool z3_hashmap_iter_next (HashMapIterator* it) {
   while (it->idx < it->map->max) {
     size_t i = it->idx++;
 
@@ -248,11 +248,11 @@ bool z3_hashmap_iter_next (Z3HashMapIterator* it) {
   return false;
 }
 
-void z3_hashmap_drop (Z3HashMap* map) {
+void z3_hashmap_drop (HashMap* map) {
   if (!map) return;
   for (size_t i = 0; i < map->max; ++i) {
     if (z3_hashmap_pos_used (map->bfs, i)) {
-      Z3HashMapEntry* entry = &map->beds[i];
+      HashMapEntry* entry = &map->beds[i];
       free (entry->key);
       free (entry->val);
     }
@@ -262,11 +262,11 @@ void z3_hashmap_drop (Z3HashMap* map) {
   free (map);
 }
 
-void z3_hashmap_drop_shallow (Z3HashMap* map) {
+void z3_hashmap_drop_shallow (HashMap* map) {
   if (!map) return;
   for (size_t i = 0; i < map->max; ++i) {
     if (z3_hashmap_pos_used (map->bfs, i)) {
-      Z3HashMapEntry* entry = &map->beds[i];
+      HashMapEntry* entry = &map->beds[i];
       free (entry->key);
     }
   }

@@ -51,7 +51,7 @@ String z3_strcpy (const char* s);
 String z3_strdup (const String* str);
 
 //~ Append a single char to a String
-void z3_pushc (String* str, char s);
+void z3_pushc (String* str, char c);
 
 //~ Append a C-style string to a String
 void z3_pushl (String* str, const char* s, size_t l);
@@ -84,16 +84,12 @@ String z3_interp (
   const String* tmplt, bool (*filler) (String*, void*, char*, size_t), void* ctx
 );
 
-#ifdef Z3_TOYS_SCOPED
-//~ Cleanup function for String (used with attribute cleanup)
-void __cleanup_String (String* s);
-
 //~ Define a String with automatic cleanup
 #define ScopedString __attribute__ ((cleanup (z3_drops))) String
-#endif  // Z3_TOYS_SCOPED
 
 #ifdef Z3_STRING_IMPL
 #include <ctype.h>
+#include <unistd.h>
 
 void z3_reserve (String* str, size_t additional) {
   if (!str || !str->chr) return;
@@ -103,6 +99,7 @@ void z3_reserve (String* str, size_t additional) {
       str->max *= 2;
     }
 
+    // NOLINTNEXTLINE (bugprone-suspicious-realloc-usage)
     str->chr = realloc (str->chr, str->max);
     if (str->chr == nullptr) die ("String realloc: requested %zu bytes\n", str->max);
   }
@@ -150,10 +147,7 @@ String z3_strcpy (const char* s) {
   str.max = ((len & (len - 1)) == 0) ? len : next_power_of2 (len);
   str.len = len - 1;
   str.chr = malloc (str.max);
-  if (str.chr == nullptr) {
-    fprintf (stderr, "failed to allocate memory for string\n");
-    exit (EXIT_FAILURE);
-  }
+  if (str.chr == nullptr) die ("failed to allocate memory for string\n");
   strcpy (str.chr, s);
   str.chr[str.len] = '\0';
   return str;
@@ -187,7 +181,7 @@ void z3_drops (String* str) {
 String z3_interp (
   const String* tmplt, bool (*filler) (String*, void*, char*, size_t), void* ctx
 ) {
-  String result = z3_str (32);
+  String result = z3_str (32);  // NOLINT (readability-magic-numbers)
 
   size_t i = 0;
 
@@ -242,7 +236,7 @@ String z3_interp (
 
 String z3_escape (const char* input, size_t len) {
   char hex_digits[] = "0123456789abcdef";
-  String s = z3_str (32);
+  String s = z3_str (32);  // NOLINT (readability-magic-numbers)
   size_t l = 0;
 
   // loop until `\0`, or until length
@@ -282,13 +276,13 @@ String z3_escape (const char* input, size_t len) {
 
       // Printable ASCII (0x20 - 0x7E), no need to escape
       default:
-        if (c < 0x20 || c > 0x7E) {
+        if (c < 0x20 || c > 0x7E) {  // NOLINT (readability-magic-numbers)
           // Non-printables escaped as hex
-          z3_pushc (&s, '\\');  // Escape char
-          z3_pushc (&s, 'x');   // 'x' for hex escape
+          z3_pushc (&s, '\\');                        // Escape char
+          z3_pushc (&s, 'x');                         // 'x' for hex escape
 
-          z3_pushc (&s, hex_digits[(c >> 4) & 0xF]);
-          z3_pushc (&s, hex_digits[c & 0xF]);
+          z3_pushc (&s, hex_digits[(c >> 4) & 0xF]);  // NOLINT (readability-magic-numbers)
+          z3_pushc (&s, hex_digits[c & 0xF]);         // NOLINT (readability-magic-numbers)
         } else {
           z3_pushc (&s, (char)c);
         }
@@ -302,7 +296,7 @@ String z3_escape (const char* input, size_t len) {
 }
 
 String z3_unescape (const char* input, size_t len) {
-  String s = z3_str (32);
+  String s = z3_str (32);  // NOLINT (readability-magic-numbers)
   size_t l = 0;
 
   // loop until `\0`, or until length
@@ -356,9 +350,9 @@ String z3_unescape (const char* input, size_t len) {
           if (c >= '0' && c <= '9')
             byte_value |= (c - '0');
           else if (c >= 'a' && c <= 'f')
-            byte_value |= (c - 'a' + 10);
+            byte_value |= (c - 'a' + 10);  // NOLINT (readability-magic-numbers)
           else if (c >= 'A' && c <= 'F')
-            byte_value |= (c - 'A' + 10);
+            byte_value |= (c - 'A' + 10);  // NOLINT (readability-magic-numbers)
 
           c = *input;
           byte_value <<= 4;
@@ -366,9 +360,9 @@ String z3_unescape (const char* input, size_t len) {
           if (c >= '0' && c <= '9')
             byte_value |= (c - '0');
           else if (c >= 'a' && c <= 'f')
-            byte_value |= (c - 'a' + 10);
+            byte_value |= (c - 'a' + 10);  // NOLINT (readability-magic-numbers)
           else if (c >= 'A' && c <= 'F')
-            byte_value |= (c - 'A' + 10);
+            byte_value |= (c - 'A' + 10);  // NOLINT (readability-magic-numbers)
           z3_pushc (&s, (char)byte_value);
 
           break;
@@ -389,11 +383,5 @@ String z3_unescape (const char* input, size_t len) {
   z3_ensure0 (&s);
   return s;
 }
-
-#ifdef Z3_TOYS_SCOPED
-void __cleanup_String (String* s) {
-  z3_drops (s);
-}
-#endif  // Z3_TOYS_SCOPED
 
 #endif  // Z3_STRING_IMPL

@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #define Z3_TOYS_SCOPED
@@ -26,7 +27,7 @@ String float_to_str (float num);
 // z3_dropfn (String, z3_drops);
 
 // static bool fill (String* s, void* ctx, const char* path, size_t /*unused*/) {
-//   VectorZ3* any = ctx;
+//   Vector* any = ctx;
 //   size_t i = (size_t)strtol (path, nullptr, 10);  // NOLINT(readability-magic-numbers)
 //   if (i > any->len) return false;
 //   String* as = z3_get (*any, i);
@@ -68,7 +69,7 @@ static void print_anvil_config (const AnvilConfig* config) {
       printf ("  Type: %s\n", tgt->type);
       printf ("  Main: %s\n", tgt->main);
       for (size_t j = 0; j < tgt->target_count; j++) {
-        printf ("    arch[%zu]: %s\n", j, tgt->target[j]);
+        printf ("    for[%zu]: %s\n", j, tgt->target[j]);
       }
     }
   } else {
@@ -77,12 +78,13 @@ static void print_anvil_config (const AnvilConfig* config) {
 
   // Build
   printf ("\n-- Build --\n");
-  printf ("Compiler: %s\n", config->build->compiler);
-  printf ("C Standard: %s\n", config->build->cstd);
+  printf ("Compiler   = %s\n", config->build->compiler);
+  printf ("C Standard = %s\n", config->build->cstd);
+  printf ("Jobs       = %zu\n", config->build->jobs);
 
   printf ("Macros:\n");
   if (config->build->macros) {
-    Z3HashMapIterator it;
+    HashMapIterator it;
     z3_hashmap_iter_init (&it, config->build->macros);
     while (z3_hashmap_iter_next (&it)) {
       printf ("  %s = %s\n", it.key, (char*)it.val);
@@ -91,16 +93,20 @@ static void print_anvil_config (const AnvilConfig* config) {
 
   printf ("Arguments:\n");
   if (config->build->arguments) {
-    Z3HashMapIterator it;
+    HashMapIterator it;
     z3_hashmap_iter_init (&it, config->build->arguments);
+    ScopedString command_line = z3_str (32);  // NOLINT (readability-magic-numbers)
     while (z3_hashmap_iter_next (&it)) {
       printf ("  %s\n", it.key);
       ArgumentConfig* args = it.val;
-      printf ("    validate_str = %s\n", args->validate_str);
+      printf ("    validation   = %s\n", args->validation);
       printf ("    cache_policy = %s\n", args->cache_policy);
-      for (size_t i = 0; i < args->commands_count; i++) {
-        printf ("    -> %s\n", args->commands[i]);
+      for (size_t i = 0; i < args->command_len; i++) {
+        size_t len = strlen (args->command[i]);
+        z3_pushl (&command_line, args->command[i], len);
+        if (i < args->command_len - 1) z3_pushc (&command_line, ' ');
       }
+      printf ("    :~> %s\n", command_line.chr);
     }
   }
 
@@ -117,10 +123,10 @@ static void print_anvil_config (const AnvilConfig* config) {
   // Profiles
   if (config->profiles) {
     printf ("\n-- Profiles --\n");
-    Z3HashMapIterator it;
+    HashMapIterator it;
     z3_hashmap_iter_init (&it, config->profiles);
     while (z3_hashmap_iter_next (&it)) {
-      VectorZ3* profc = it.val;
+      Vector* profc = it.val;
       printf ("  %s (%zu):\n", it.key, profc->len);
       for (size_t i = 0; i < profc->len; i++) {
         printf ("      [%zu] %s\n", i, *(char**)z3_get (*profc, i));
@@ -135,19 +141,19 @@ int main (int argc, char** argv) {
   IGNORE_UNUSED (char* _this_file = popf (argc, argv));  // NOLINT (concurrency-mt-unsafe)
   char* file_name = popf (argc, argv);                   // NOLINT (concurrency-mt-unsafe)
 
-  FILE* file = fopen (file_name, "r");
-  CHECK_OR_RETURN (fseek (file, 0, SEEK_END), 1);
-  long length = ftell (file);
-  CHECK_OR_RETURN (fseek (file, 0, SEEK_SET), 1);
-  CHECK_OR_RETURN (length, 1);
-  size_t file_size = (size_t)length;
+  // FILE* file = fopen (file_name, "r");
+  // CHECK_OR_RETURN (fseek (file, 0, SEEK_END), 1);
+  // long length = ftell (file);
+  // CHECK_OR_RETURN (fseek (file, 0, SEEK_SET), 1);
+  // CHECK_OR_RETURN (length, 1);
+  // size_t file_size = (size_t)length;
+  //
+  // char* yaml_input = malloc (next_power_of2 (file_size + 1));
+  // if (fread (yaml_input, 1, file_size, file) != file_size) return 1;
+  // yaml_input[file_size] = '\0';
+  // CHECK_OR_RETURN (fclose (file), 1);
 
-  char* yaml_input = malloc (next_power_of2 (file_size + 1));
-  if (fread (yaml_input, 1, file_size, file) != file_size) return 1;
-  yaml_input[file_size] = '\0';
-  CHECK_OR_RETURN (fclose (file), 1);
-
-  Node* root = parse_yaml (yaml_input);
+  Node* root = parse_yaml (file_name);
 
   if (!root) {
     errpfmt ("Failed to parse YAML\n");
@@ -160,7 +166,7 @@ int main (int argc, char** argv) {
   free_anvil_config (config);
   free_yaml (root);
 
-  free (yaml_input);
+  // free (yaml_input);
   return 0;
 }
 

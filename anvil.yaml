@@ -6,12 +6,6 @@ version: '0.1' # There's no mayor version, till we reach 0.4
 author : 'Klapptnot Z3' # UwU~
 description: "A #{C} build tool-- UwU~"
 
-# these are just as (for now) these anchors
-# are not defined by default, it will be
-# these will be like the "use default", or
-# just to have some values that are valid (we'll see)
-_: &exec "executable"
-
 # override build tool defaults, AWD == Anvil Work Dir (project root)
 workspace: {
   libs: "#{AWD}/libs", # default "#{AWD}/src/libs"
@@ -23,10 +17,10 @@ workspace: {
 targets: [
   {
     name: "anvil",
-    type: *exec, # Yeah, this alias is a global of `anvil`
+    type: "exec",
     main: "#{AWD}/src/main.c",
     macros: {},
-    target: [
+    for: [
       "x86_64-linux-gnu",
       "aarch64-linux-gnu"
     ]
@@ -36,6 +30,7 @@ targets: [
 build: {
   compiler: "clang",
   cstd: "c23",
+  jobs: 1, # 0 -> auto
 
   # arguments are defined below
   # hooks are bash scripts in `hooks` folder
@@ -46,11 +41,9 @@ build: {
 
   arguments: {
     git_hash: {
-      validate_str: "off", # off, compact, content, strict
+      validation: "none", # none, status, content, all
       cache_policy: "memoize", # never, memoize, always
-      commands: [
-        "git rev-parse HEAD"
-      ]
+      command: ["git", "rev-parse\n", "HEAD"]
     }
   },
 
@@ -79,7 +72,7 @@ build: {
 # debug: *release_prof,
 profiles: {
   release: [
-    "-O3", # lol
+    "-O3",
     "-Werror",
     "-DNDEBUG",
     "-Wall",

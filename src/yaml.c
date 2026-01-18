@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2025-present Klapptnot
 
+#include <assert.h>
+#include <ctype.h>
+#include <errno.h>
 #include <stdint.h>
-#ifdef __YAML_TEST
+#ifdef _YAML_TEST
 #define Z3_TOYS_IMPL
 #define Z3_STRING_IMPL
 #endif
 
-#include <ctype.h>
 #include <fcntl.h>
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,71 +18,97 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <yaml.h>
+#include <z3_string.h>
 #include <z3_toys.h>
 #include <z3_vector.h>
 
 #include "paerr.c"  // NOLINT (bugprone-suspicious-include)
 
-#define NODE_INITIAL_CAPACITY 8
+static Node* parse_value (YamlParser* yp);
 
-static Node* parse_value (Tokenizer* tokenizer);
+static int fd_open_file (const char* filepath) {
+  if (!filepath) return -1;
 
-// static int safe_open_file (const char* filepath) {
-//   if (!filepath) return -1;
-//
-//   int fd = open (filepath, O_RDONLY | O_NONBLOCK);
-//   if (fd == -1) return -1;
-//
-//   struct stat st;
-//   if (fstat (fd, &st) == -1 || !S_ISREG (st.st_mode)) {
-//     close (fd);
-//     return -1;
-//   }
-//
-//   return fd;
-// }
+  int fd = open (filepath, O_RDONLY | O_NONBLOCK);
+  if (fd == -1) return -1;
+
+  struct stat st;
+  if (fstat (fd, &st) == -1 || !S_ISREG (st.st_mode)) {
+    close (fd);
+    return -1;
+  }
+
+  return fd;
+}
+
+static ssize_t refill_buffers (YamlParser* yp) {
+  ssize_t n = read (yp->ifd, yp->buff, YAML_CHUNK_SIZE);
+  if (n < 0) die ("could not continue reading file: %s", strerror (errno));
+
+  yp->cpos = 0;
+  yp->blen = (uint16_t)n;
+  yp->bred = (uint16_t)n;
+  return n;
+}
 
 extern const char* const token_kind_strings[];
 const char* node_kind_names[];
 
 extern const uint8_t char_flags[256];
 #define token_kind_to_string(kind) token_kind_strings[kind]
-
-#define create_token(k, s, len, ln, col) \
-  ((Token) {.kind = (k), .start = (s), .length = (len), .line = (ln), .column = (col)})
+#define is_number_parseable(c)     (isdigit (c) || (c) == '.' || (c) == '-' || (c) == '+')
+#define is_valid_anchor(c)         (isalnum (c) || (c) == '_' || (c) == '-')
 
 // Peek at current character without advancing the position
-[[clang::always_inline]] static char peek_char (Tokenizer* tokenizer) {
-  return tokenizer->input[tokenizer->cpos];
+[[clang::always_inline]]
+static char peek_char (YamlParser* yp) {
+  return yp->buff[yp->cpos];
 }
 
-// #define m_skip_char(tokenizer)                         \
-//   (tokenizer->input[tokenizer->cpos++] == CHAR_NEWLINE \
-//        ? (tokenizer->line++, tokenizer->ccol = 1)    \
-//        : (tokenizer->ccol++))
+[[clang::always_inline]]
+static Token peek_token (YamlParser* yp) {
+  return yp->cur_token;
+}
 
-[[clang::always_inline]] static void skip_char (Tokenizer* tokenizer) {
-  if (tokenizer->input[tokenizer->cpos++] == CHAR_NEWLINE) {
-    tokenizer->line++;
-    tokenizer->ccol = 1;
+[[clang::always_inline]]
+static bool eof_reached (YamlParser* yp) {
+  return (yp->bred == 0 && yp->cpos >= yp->blen) != 0;
+}
+
+[[clang::always_inline]]
+static void skip_char (YamlParser* yp) {
+  if (peek_char (yp) == CHAR_NEWLINE) {
+    yp->line++;
+    yp->lpos = 0;
   } else {
-    tokenizer->ccol++;
+    yp->lpos++;
+  }
+
+  // buffer is empty (read did not refill cuz EOF), and still, not handled
+  // not dying is just making it loop because caller did not handle, and won't
+  if (yp->blen == 0 && yp->bred == 0) die ("Check who called me I should not get to skip if EOF :anger:");
+  if (++yp->cpos >= yp->blen) refill_buffers (yp);
+}
+
+[[clang::always_inline]]
+static void skip_comment (YamlParser* yp) {
+  while (!eof_reached (yp) && peek_char (yp) != CHAR_NEWLINE) {
+    skip_char (yp);
   }
 }
 
 // skip and count whitespace (excluding newlines)
-static void skip_whitespace (Tokenizer* tokenizer) {
-  while (tokenizer->input[tokenizer->cpos] == CHAR_SPACE) {
-    tokenizer->cpos++;
-    tokenizer->ccol++;
+static void skip_whitespace (YamlParser* yp) {
+  while (peek_char (yp) == CHAR_SPACE) {
+    skip_char (yp);
+    if (eof_reached (yp)) return;
   }
-  if (tokenizer->input[tokenizer->cpos] == CHAR_TAB) {
+
+  if (peek_char (yp) == CHAR_TAB) {
     parser_error (
-      tokenizer,
+      yp,
       (YamlError) {
         .kind = TAB_INDENTATION,
-        .pos = tokenizer->cpos,
-        .len = 1,
         .got = "",
         .exp = "",
       }
@@ -89,252 +116,332 @@ static void skip_whitespace (Tokenizer* tokenizer) {
   }
 }
 
-static char skip_all_whitespace (Tokenizer* tokenizer) {
-  while (1) {
-    skip_whitespace (tokenizer);
+static char skip_all_whitespace (YamlParser* yp) {
+  while (!eof_reached (yp)) {
+    skip_whitespace (yp);
 
-    char c = peek_char (tokenizer);
+    char c = peek_char (yp);
     if (c != CHAR_NEWLINE) return c;
 
+    // it IS a newline, do-while
+    yp->lpos = 0;
     do {
-      tokenizer->cpos++;
-      tokenizer->line++;
-    } while (tokenizer->input[tokenizer->cpos] == CHAR_NEWLINE);
-
-    tokenizer->ccol = 1;
+      if (++yp->cpos >= YAML_CHUNK_SIZE) refill_buffers (yp);
+      yp->line++;
+    } while (peek_char (yp) == CHAR_NEWLINE);
   }
+  return CHAR_EOF;
 }
 
-// read the token value out of the input
-__attribute__ ((malloc)) static char* token_value (Tokenizer* tokenizer, Token token) {
-  size_t offset = token.start;
-  size_t length = token.length;
-
-  if (token.kind == TOKEN_STRING_LIT || token.kind == TOKEN_STRING) {
-    length -= 2;  // the wrapping quotes
-    offset++;     // move past the first quote
+#define create_token(k, v, l)              \
+  (Token) {                                \
+    .kind = (k), .raw = (v), .length = (l) \
   }
 
-  // if (token.kind == TOKEN_STRING) {
-  //   return unescape_str(tokenizer->input + token.start, token.length);
-  // }
+#define create_token_lit(k, v)                                        \
+  (Token) {                                                           \
+    .kind = (k), .raw = (char*)strdup (v), .length = (sizeof (v) - 1) \
+  }
 
-  char* slice = malloc (length + 1);
-  if (!slice) die ("Out of memory allocating %zu bytes", length + 1);
+static Token try_string_unesc (YamlParser* yp) {
+  skip_char (yp);  // skip opening quote
 
-  memcpy (slice, tokenizer->input + offset, length);
-  slice[length] = '\0';
+  String s = z3_str (HEAP_VALUE_MIN_SIZE);
+  char ilubsm[STACK_VALUE_BUFFER_SIZE];
+  uint16_t len = 0;
+  while (!eof_reached (yp) && peek_char (yp) != CHAR_QUOTE_DOUBLE &&
+         peek_char (yp) != CHAR_NEWLINE) {
+    if (len >= STACK_VALUE_BUFFER_SIZE) {
+      z3_pushl (&s, ilubsm, len);
+      len = 0;
+    }
+    ilubsm[len++] = peek_char (yp);
+    skip_char (yp);
+  }
 
-  return slice;
+  if (peek_char (yp) != CHAR_QUOTE_DOUBLE) {
+    char c = peek_char (yp);
+    parser_error (
+      yp,
+      (YamlError) {.kind = UNCLOSED_QUOTE, .got = !eof_reached (yp) ? &c : "EOF", .exp = "\""}
+    );
+  }
+  if (len > 0) z3_pushl (&s, ilubsm, len);
+
+  // String struct is stack allocated, but the `chr` is heap
+  // so, you can use the pointer as if just malloc'ed
+  // the struct ceases to exist
+  String unesc = z3_unescape (s.chr, s.len);
+
+  skip_char (yp);  // skip closing quote
+  return (yp->cur_token = create_token (TOKEN_STRING, unesc.chr, (uint32_t)unesc.len));
 }
 
-[[clang::always_inline]]
-static Token peek_token (Tokenizer* tokenizer) {
-  return tokenizer->cur_token;
+static Token try_string_lit (YamlParser* yp) {
+  String s = z3_str (HEAP_VALUE_MIN_SIZE);
+  char ilubsm[STACK_VALUE_BUFFER_SIZE];
+  uint16_t len = 0;
+  while (peek_char (yp) == CHAR_QUOTE_SINGLE) {
+    skip_char (yp);  // open quote, or the second one of ''
+
+    // skip until boundary
+    while (!eof_reached (yp) && peek_char (yp) != CHAR_QUOTE_SINGLE &&
+           peek_char (yp) != CHAR_NEWLINE) {
+      if (len >= STACK_VALUE_BUFFER_SIZE) {
+        z3_pushl (&s, ilubsm, len);
+        len = 0;
+      }
+      ilubsm[len++] = peek_char (yp);
+      skip_char (yp);
+    }
+
+    if (peek_char (yp) != CHAR_QUOTE_SINGLE) {
+      char c = peek_char (yp);
+      parser_error (
+        yp,
+        (YamlError) {// ugh :anger:
+                     .kind = UNCLOSED_QUOTE,
+                     .got = !eof_reached (yp) ? &c : "EOF",
+                     .exp = &c
+        }
+      );
+    }
+
+    // either an '' or definite end
+    skip_char (yp);  // skip one
+
+    // if '', then continue after it
+    if (peek_char (yp) != CHAR_QUOTE_SINGLE) break;
+    if (len >= STACK_VALUE_BUFFER_SIZE) {
+      z3_pushl (&s, ilubsm, len);
+      len = 0;
+    }
+    ilubsm[len++] = peek_char (yp);
+  }
+  if (len > 0) z3_pushl (&s, ilubsm, len);
+
+  return (yp->cur_token = create_token (TOKEN_STRING_LIT, s.chr, (uint32_t)s.len));
 }
 
-static Token next_token (Tokenizer* tokenizer) {
-  int loop_track = 1;
-  int ident_flag = TAG_NULL;
+static Token try_anchor_or_alias (YamlParser* yp, enum TagKind ident_flag) {
+  String s = z3_str (HEAP_VALUE_MIN_SIZE);
+  char ilubsm[STACK_VALUE_BUFFER_SIZE];
+  uint16_t len = 0;
+
+  while (!eof_reached (yp) && is_valid_anchor (peek_char (yp))) {
+    if (len >= STACK_VALUE_BUFFER_SIZE) {
+      z3_pushl (&s, ilubsm, len);
+      len = 0;
+    }
+    ilubsm[len++] = peek_char (yp);
+    skip_char (yp);
+  }
+
+  if (len > 0) z3_pushl (&s, ilubsm, len);
+
+  TokenKind kind = (ident_flag == TAG_ANCHOR) ? TOKEN_ANCHOR : TOKEN_ALIAS;
+  return (yp->cur_token = create_token (kind, s.chr, (uint32_t)s.len));
+}
+
+static Token try_token_number (YamlParser* yp) {
+  String s = z3_str (HEAP_VALUE_MIN_SIZE);
+  char ilubsm[STACK_VALUE_BUFFER_SIZE];
+  uint16_t len = 0;
+
+  while (!eof_reached (yp) && is_number_parseable (peek_char (yp))) {
+    if (len >= STACK_VALUE_BUFFER_SIZE) {
+      z3_pushl (&s, ilubsm, len);
+      len = 0;
+    }
+    ilubsm[len++] = peek_char (yp);
+    skip_char (yp);
+  }
+
+  if (!eof_reached (yp) && peek_char (yp) != CHAR_SPACE) {
+    // definitively a number
+    if (len > 0) z3_pushl (&s, ilubsm, len);
+    return create_token (TOKEN_NUMBER, s.chr, (uint32_t)s.len);
+  }
+
+  // Not a number, caller should try other parsers
+  z3_drops (&s);
+  return (Token) {.kind = TOKEN_UNKNOWN, .raw = nullptr, .length = 0};
+}
+
+static Token try_boolean (YamlParser* yp, char first_char) {
+  if (first_char == 't') {
+    // Try to match "true"
+    if (!eof_reached (yp) && peek_char (yp) == 't') {
+      skip_char (yp);
+      if (!eof_reached (yp) && peek_char (yp) == 'r') {
+        skip_char (yp);
+        if (!eof_reached (yp) && peek_char (yp) == 'u') {
+          skip_char (yp);
+          if (!eof_reached (yp) && peek_char (yp) == 'e') {
+            skip_char (yp);
+            if ((int)eof_reached (yp) || peek_char (yp) == CHAR_SPACE ||
+                peek_char (yp) == CHAR_NEWLINE) {
+              return create_token_lit (TOKEN_BOOLEAN, "true");
+            }
+          }
+        }
+      }
+    }
+  } else if (first_char == 'f') {
+    // Try to match "false"
+    if (!eof_reached (yp) && peek_char (yp) == 'f') {
+      skip_char (yp);
+      if (!eof_reached (yp) && peek_char (yp) == 'a') {
+        skip_char (yp);
+        if (!eof_reached (yp) && peek_char (yp) == 'l') {
+          skip_char (yp);
+          if (!eof_reached (yp) && peek_char (yp) == 's') {
+            skip_char (yp);
+            if (!eof_reached (yp) && peek_char (yp) == 'e') {
+              skip_char (yp);
+              if ((int)eof_reached (yp) || peek_char (yp) == CHAR_SPACE ||
+                  peek_char (yp) == CHAR_NEWLINE) {
+                return create_token_lit (TOKEN_BOOLEAN, "false");
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Not a boolean, caller should try other parsers
+  return (Token) {.kind = TOKEN_UNKNOWN, .raw = nullptr, .length = 0};
+}
+
+static Token try_key (YamlParser* yp) {
+  String s = z3_str (HEAP_VALUE_MIN_SIZE);
+  char ilubsm[STACK_VALUE_BUFFER_SIZE];
+  uint16_t len = 0;
+
+  // First character already peeked by caller, collect it
+  if (len >= STACK_VALUE_BUFFER_SIZE) {
+    z3_pushl (&s, ilubsm, len);
+    len = 0;
+  }
+  ilubsm[len++] = peek_char (yp);
+  skip_char (yp);
+
+  // Parse as key
+  while (!eof_reached (yp)) {
+    if (peek_char (yp) == CHAR_COLON) {
+      skip_char (yp);
+      if ((int)eof_reached (yp) || peek_char (yp) == CHAR_SPACE) break;
+
+      // Colon wasn't followed by space/EOF, include it in key
+      if (len >= STACK_VALUE_BUFFER_SIZE) {
+        z3_pushl (&s, ilubsm, len);
+        len = 0;
+      }
+      ilubsm[len++] = CHAR_COLON;
+      continue;
+    }
+
+    if (len >= STACK_VALUE_BUFFER_SIZE) {
+      z3_pushl (&s, ilubsm, len);
+      len = 0;
+    }
+    ilubsm[len++] = peek_char (yp);
+    skip_char (yp);
+  }
+
+  if (len > 0) z3_pushl (&s, ilubsm, len);
+
+  return (yp->cur_token = create_token (TOKEN_KEY, s.chr, (uint32_t)s.len));
+}
+static Token next_token (YamlParser* yp) {
+  enum TagKind ident_flag = TAG_NULL;
 go_back_to_start:
-  if (peek_char (tokenizer) == CHAR_EOF) {
-    tokenizer->line--;
-    tokenizer->cur_token =
-      create_token (TOKEN_EOF, tokenizer->cpos, 0, tokenizer->line, tokenizer->ccol);
-    return tokenizer->cur_token;
+  if (eof_reached (yp)) {
+    yp->cur_token = (Token) {.kind = TOKEN_EOF, .raw = nullptr, .length = 0};
+    return yp->cur_token;
   }
 
-  skip_whitespace (tokenizer);
-  char c = peek_char (tokenizer);
-  size_t start_position = tokenizer->cpos;
-  size_t start_line = tokenizer->line;
-  size_t start_column = tokenizer->ccol;
-  size_t length;
+  skip_whitespace (yp);
+  char c = peek_char (yp);
 
   switch (c) {
     case CHAR_NEWLINE:
-      while (tokenizer->input[tokenizer->cpos] == CHAR_NEWLINE) {
-        tokenizer->cpos++;
-        tokenizer->line++;
-      }
-      tokenizer->ccol = 1;
+      skip_all_whitespace (yp);
       goto go_back_to_start;
 
     case CHAR_HASH:
-      // read until end of line
-      while (peek_char (tokenizer) != CHAR_NEWLINE && peek_char (tokenizer) != CHAR_EOF) {
-        skip_char (tokenizer);
-      }
+      skip_comment (yp);
       goto go_back_to_start;
 
     case CHAR_AMPERSAND:
       ident_flag = TAG_ANCHOR;
-      skip_char (tokenizer);
+      skip_char (yp);
       goto go_back_to_start;
 
     case CHAR_ASTERISK:
       ident_flag = TAG_ALIAS;
-      skip_char (tokenizer);
+      skip_char (yp);
       goto go_back_to_start;
 
-    case CHAR_COLON:
-      tokenizer->cur_token =
-        create_token (TOKEN_COLON, tokenizer->cpos, 1, start_line, start_column);
-      skip_char (tokenizer);
-      return tokenizer->cur_token;
-
     case CHAR_COMMA:
-      tokenizer->cur_token =
-        create_token (TOKEN_COMMA, tokenizer->cpos, 1, start_line, start_column);
-      skip_char (tokenizer);
-      return tokenizer->cur_token;
-
     case CHAR_OPEN_BRACE:
-      tokenizer->cur_token =
-        create_token (TOKEN_OPEN_MAP, tokenizer->cpos, 1, start_line, start_column);
-      skip_char (tokenizer);
-      return tokenizer->cur_token;
-
     case CHAR_OPEN_BRACKET:
-      tokenizer->cur_token =
-        create_token (TOKEN_OPEN_SEQ, tokenizer->cpos, 1, start_line, start_column);
-      skip_char (tokenizer);
-      return tokenizer->cur_token;
-
     case CHAR_CLOSE_BRACE:
-      tokenizer->cur_token =
-        create_token (TOKEN_CLOSE_MAP, tokenizer->cpos, 1, start_line, start_column);
-      skip_char (tokenizer);
-      return tokenizer->cur_token;
-
-    case CHAR_CLOSE_BRACKET:
-      tokenizer->cur_token =
-        create_token (TOKEN_CLOSE_SEQ, tokenizer->cpos, 1, start_line, start_column);
-      skip_char (tokenizer);
-      return tokenizer->cur_token;
+    case CHAR_CLOSE_BRACKET: {
+      TokenKind type;
+      const char* lit;
+      switch (c) { /* NOLINT (bugprone-switch-missing-default-case) literally never */
+        case CHAR_COMMA:
+          type = TOKEN_COMMA;
+          lit = ",";
+          break;
+        case CHAR_OPEN_BRACE:
+          type = TOKEN_OPEN_MAP;
+          lit = "{";
+          break;
+        case CHAR_OPEN_BRACKET:
+          type = TOKEN_OPEN_SEQ;
+          lit = "[";
+          break;
+        case CHAR_CLOSE_BRACE:
+          type = TOKEN_CLOSE_MAP;
+          lit = "}";
+          break;
+        case CHAR_CLOSE_BRACKET:
+          type = TOKEN_CLOSE_SEQ;
+          lit = "]";
+          break;
+      }
+      yp->cur_token = create_token_lit (type, lit);
+      skip_char (yp);
+      return yp->cur_token;
+    }
 
     case CHAR_QUOTE_DOUBLE:
-      skip_char (tokenizer);
-
-      while (peek_char (tokenizer) != CHAR_QUOTE_DOUBLE &&
-             peek_char (tokenizer) != CHAR_NEWLINE && peek_char (tokenizer) != CHAR_EOF) {
-        if (peek_char (tokenizer) == '\\') skip_char (tokenizer);
-        skip_char (tokenizer);
-      }
-
-      if (peek_char (tokenizer) != CHAR_QUOTE_DOUBLE) {
-        parser_error (
-          tokenizer,
-          (YamlError) {.kind = UNCLOSED_QUOTE,
-                       .pos = start_position,  // position of opening quote
-                       .len = tokenizer->cpos - start_position,
-                       .got = peek_char (tokenizer) == CHAR_EOF ? "EOF" : "NEWLINE",
-                       .exp = "\""}
-        );
-      }
-
-      tokenizer->cur_token = create_token (
-        TOKEN_STRING,
-        start_position,
-        tokenizer->cpos - start_position + 1,
-        start_line,
-        start_column
-      );
-
-      skip_char (tokenizer);
-      return tokenizer->cur_token;
+      return try_string_unesc (yp);
 
     case CHAR_QUOTE_SINGLE:
-      skip_char (tokenizer);
-
-      while (peek_char (tokenizer) != CHAR_QUOTE_SINGLE &&
-             peek_char (tokenizer) != CHAR_NEWLINE && peek_char (tokenizer) != CHAR_EOF) {
-        skip_char (tokenizer);
-      }
-
-      if (peek_char (tokenizer) != CHAR_QUOTE_SINGLE) {
-        parser_error (
-          tokenizer,
-          (YamlError) {.kind = UNCLOSED_QUOTE,
-                       .pos = start_position,  // position of opening quote
-                       .len = tokenizer->cpos - start_position,
-                       .got = peek_char (tokenizer) == CHAR_EOF ? "EOF" : "NEWLINE",
-                       .exp = "'"}
-        );
-      }
-
-      tokenizer->cur_token = create_token (
-        TOKEN_STRING_LIT,
-        start_position,
-        tokenizer->cpos - start_position + 1,
-        start_line,
-        start_column
-      );
-
-      skip_char (tokenizer);
-      return tokenizer->cur_token;
+      return try_string_lit (yp);
 
     default:
-      // if (c == '<') {
-      //   if (tokenizer->input[tokenizer->cpos + 1] == '<') {
-      //     skip_char (tokenizer);
-      //     return create_token (TOKEN_MERGE, tokenizer->cpos - 1, 2, start_line,
-      //     start_column);
-      //   }
-      // }
-      if (char_flags[(uint8_t)c]) {
-        int is_numeric = (isdigit (c) || c == '.' || c == '-' || c == '+');
-        skip_char (tokenizer);
-
-        while (char_flags[(uint8_t)peek_char (tokenizer)] & (is_numeric ? 1 : 2)) {
-          skip_char (tokenizer);
-        }
-
-        // ':' can be in key name, but the last one shoulf be
-        // TOKEN_COLON, so step back
-        if (peek_char (tokenizer) == ' ' && tokenizer->input[tokenizer->cpos - 1] == ':') {
-          tokenizer->cpos -= 1;
-          tokenizer->ccol -= 1;
-        }
-
-        length = tokenizer->cpos - start_position;
-
-        // Handle boolean detection and token creation
-        if (!is_numeric && peek_char (tokenizer) != CHAR_COLON) {
-          // NOLINTBEGIN (readability-magic-numbers) len ("false") == 5
-          if ((length == 4 && !memcmp (tokenizer->input + start_position, "true", 4)) ||
-              (length == 5 &&
-               !memcmp (tokenizer->input + start_position, "false", 5))) /* NOLINTEND */ {
-            return (
-              tokenizer->cur_token =
-                create_token (TOKEN_BOOLEAN, start_position, length, start_line, start_column)
-            );
-          }
-        }
-
-        TokenKind type;
-
-        if (is_numeric) {
-          type = TOKEN_NUMBER;
-        } else if (ident_flag == TAG_ANCHOR || ident_flag == TAG_ALIAS) {
-          type = ident_flag == TAG_ANCHOR ? TOKEN_ANCHOR : TOKEN_ALIAS;
-          start_position--;
-          length++;
-        } else {
-          type = TOKEN_KEY;
-        }
-
-        return (
-          tokenizer->cur_token =
-            create_token (type, start_position, length, start_line, start_column)
-        );
+      if (ident_flag != TAG_NULL) {
+        return try_anchor_or_alias (yp, ident_flag);
       }
 
-      if (peek_char (tokenizer) == CHAR_EOF || loop_track--) goto go_back_to_start;
+      if (is_number_parseable (c)) {
+        Token num_token = try_token_number (yp);
+        if (num_token.kind != TOKEN_UNKNOWN) return num_token;
+        // Fall through to boolean/key parsing if not a number
+      }
 
-      tokenizer->cur_token =
-        create_token (TOKEN_UNKNOWN, tokenizer->cpos, 1, start_line, start_column);
-      return tokenizer->cur_token;
+      if (c == 't' || c == 'f') {
+        Token bool_token = try_boolean (yp, c);
+        if (bool_token.kind != TOKEN_UNKNOWN) return bool_token;
+        // Fall through to key parsing if not a boolean
+      }
+
+      return try_key (yp);
   }
 }
 
@@ -386,7 +493,7 @@ void free_node (Node* node) {
 
   switch (node->kind) {
     case NODE_STRING:
-      free (node->string);
+      free ((void*)node->string);
       node->string = nullptr;
       break;
 
@@ -446,37 +553,27 @@ void sequence_add (Sequence* seq, Node* item) {
   seq->size++;
 }
 
-static Node* parse_alias (Tokenizer* tokenizer, Token token) {
-  size_t aliases = tokenizer->aliases.length;
+static Node* parse_alias (YamlParser* yp, Token token) {
+  size_t aliases = yp->aliases.length;
   if (aliases == 0) return nullptr;
 
-  char* alias_name = token_value (tokenizer, token);
-  alias_name[0] = '*';
+  const char* alias_name = token.raw;
   for (size_t i = 0; i < aliases; i++) {
-    if (strcmp (tokenizer->aliases.items[i].name, alias_name) == 0) {
-      free (alias_name);
-      return tokenizer->aliases.items[i].value;
+    if (strcmp (yp->aliases.items[i].name + 1, alias_name) == 0) {
+      return yp->aliases.items[i].value;
     }
   }
-  free (alias_name);
   return nullptr;
 }
 
-static Node* parse_string (Tokenizer* tokenizer, Token token) {
-  Node* node = create_node (NODE_STRING);
-
-  node->string = token_value (tokenizer, token);
-  return node;
-}
-
-static Node* parse_number (Tokenizer* tokenizer, Token token) {
+static Node* parse_number (Token token) {
   Node* node = create_node (NODE_NUMBER);
 
   char* ver_value = malloc (token.length);
 
-  if (ver_value == NULL) die ("Out of memory allocating %zu bytes", token.length);
+  if (ver_value == NULL) die ("Out of memory allocating %d bytes", token.length);
 
-  char* value = token_value (tokenizer, token);
+  const char* value = token.raw;
   size_t i = 0;
   size_t l = 0;
   while (i++ <= token.length) {
@@ -487,38 +584,26 @@ static Node* parse_number (Tokenizer* tokenizer, Token token) {
 
   node->number = strtod (value, nullptr);
   free (ver_value);
-  free (value);
   return node;
 }
 
-static Node* parse_boolean (Tokenizer* tokenizer, Token token) {
-  Node* node = create_node (NODE_BOOLEAN);
-
-  char* value = token_value (tokenizer, token);
-  node->boolean = (token.length == 4);
-  free (value);
-  return node;
-}
-
-static Node* parse_seq (Tokenizer* tokenizer) {
+static Node* parse_seq (YamlParser* yp) {
   Node* node = create_node (NODE_SEQUENCE);
 
   while (true) {
-    if (peek_char (tokenizer) == CHAR_CLOSE_BRACKET) {
-      next_token (tokenizer);
+    if (peek_char (yp) == CHAR_CLOSE_BRACKET) {
+      next_token (yp);
       break;
     };
 
-    Node* item = parse_value (tokenizer);
-    Token token = next_token (tokenizer);
+    Node* item = parse_value (yp);
+    Token token = next_token (yp);
 
     if (token.kind == TOKEN_EOF)
       parser_error (
-        tokenizer,
+        yp,
         (YamlError) {
           .kind = UNEXPECTED_TOKEN,
-          .pos = token.start - 1,
-          .len = 1,
           .got = token_kind_to_string (token.kind),
           .exp = token_kind_to_string (TOKEN_CLOSE_SEQ),
         }
@@ -526,11 +611,9 @@ static Node* parse_seq (Tokenizer* tokenizer) {
 
     if (token.kind != TOKEN_COMMA && token.kind != TOKEN_CLOSE_SEQ)
       parser_error (
-        tokenizer,
+        yp,
         (YamlError) {
           .kind = UNEXPECTED_TOKEN,
-          .pos = token.start,
-          .len = token.length,
           .got = token_kind_to_string (token.kind),
           .exp = token_kind_to_string (TOKEN_CLOSE_SEQ),
         }
@@ -543,36 +626,34 @@ static Node* parse_seq (Tokenizer* tokenizer) {
   return node;
 }
 
-static Node* parse_map (Tokenizer* tokenizer) {
+static Node* parse_map (YamlParser* yp) {
   Node* node = create_node (NODE_MAP);
 
-  VectorZ3 merge_maps = z3_vec (size_t);
+  Vector merge_maps = z3_vec (size_t);
   TokenKind expected_next = TOKEN_UNKNOWN;
   while (true) {
-    Token token = next_token (tokenizer);
+    Token token = next_token (yp);
 
     if (token.kind == TOKEN_CLOSE_MAP) break;
-    token = peek_token (tokenizer);
+    token = peek_token (yp);
 
     if (token.kind == TOKEN_COMMA) {
-      if (tokenizer->root_mark == 0) {
+      if (yp->root_mark == 0) {
         expected_next = TOKEN_KEY;
         goto unexpected_token_inloop;
       }
-      token = next_token (tokenizer);
-    } else if (node->map.size > 0 && tokenizer->root_mark > 0) {
+      token = next_token (yp);
+    } else if (node->map.size > 0 && yp->root_mark > 0) {
       expected_next = TOKEN_COMMA;
       goto unexpected_token_inloop;
     }
 
     if (token.kind == TOKEN_EOF) {
-      if (tokenizer->root_mark == 0) break;
+      if (yp->root_mark == 0) break;
       parser_error (
-        tokenizer,
+        yp,
         (YamlError) {
           .kind = UNEXPECTED_TOKEN,
-          .pos = token.start - 1,
-          .len = 1,
           .got = token_kind_to_string (token.kind),
           .exp = token_kind_to_string (TOKEN_CLOSE_MAP),
         }
@@ -584,43 +665,32 @@ static Node* parse_map (Tokenizer* tokenizer) {
       goto unexpected_token_inloop;
     }
 
-    token = peek_token (tokenizer);
-    Token colon_token = next_token (tokenizer);
-
-    if (colon_token.kind != TOKEN_COLON) {
-      expected_next = TOKEN_COLON;
-      goto unexpected_token_inloop;
-    }
-
-    char* key = token_value (tokenizer, token);
+    char* key = token.raw;
 
     if (token.length == 2 && !memcmp (key, "<<", 2)) {
-      char c = skip_all_whitespace (tokenizer);
+      // this is… not ideal, but doing this way, stops earlier
+      char c = skip_all_whitespace (yp);
       free (key);
 
       if (c != CHAR_OPEN_BRACE && c != CHAR_ASTERISK) {
-        token = next_token (tokenizer);  // just needed for error
+        token = next_token (yp);  // just needed for error
         parser_error (
-          tokenizer,
+          yp,
           (YamlError) {
             .kind = UNEXPECTED_TOKEN,
-            .pos = token.start,
-            .len = token.length,
             .exp = "map or map alias",
             .got = token_kind_to_string (token.kind),
           }
         );
       }
 
-      Node* value = parse_value (tokenizer);
+      Node* value = parse_value (yp);
 
       if (value->kind != NODE_MAP) {
         parser_error (
-          tokenizer,
+          yp,
           (YamlError) {
             .kind = UNEXPECTED_TOKEN,
-            .pos = token.start,
-            .len = token.length,
             .exp = "map",
             .got = node_kind_names[value->kind],
           }
@@ -631,7 +701,7 @@ static Node* parse_map (Tokenizer* tokenizer) {
       continue;
     }
 
-    Node* val = parse_value (tokenizer);
+    Node* val = parse_value (yp);
     map_add (&node->map, key, val);
 
     continue;
@@ -639,11 +709,9 @@ static Node* parse_map (Tokenizer* tokenizer) {
   unexpected_token_inloop:
     // .exp can be token_kind_to_string (TOKEN_CLOSE_MAP)
     parser_error (
-      tokenizer,
+      yp,
       (YamlError) {
         .kind = UNEXPECTED_TOKEN,
-        .pos = token.start,
-        .len = token.length,
         .got = token_kind_to_string (token.kind),
         .exp = token_kind_to_string (expected_next),
       }
@@ -662,89 +730,85 @@ static Node* parse_map (Tokenizer* tokenizer) {
   }
   z3_drop_vec (merge_maps);
 
-  tokenizer->root_mark--;
+  yp->root_mark--;
   return node;
 }
 
-Node* parse_value (Tokenizer* tokenizer) {
-  Token token = next_token (tokenizer);
+Node* parse_value (YamlParser* yp) {
+  Token token = next_token (yp);
 
   switch (token.kind) {
     case TOKEN_ANCHOR: {
-      Node* value = parse_value (tokenizer);
+      Node* value = parse_value (yp);
       YamlAlias ya = (YamlAlias) {nullptr, nullptr};
-      ya.name = token_value (tokenizer, token);
+      ya.name = token.raw;
       ya.name[0] = '*';  // replace first `&` with `*`, to then match `*<alias>`
       ya.value = value;
-      if (tokenizer->aliases.length > 0) {
-        if (parse_alias (tokenizer, token) != NULL) {
+      if (yp->aliases.length > 0) {
+        if (parse_alias (yp, token) != NULL) {
           parser_error (
-            tokenizer,
-            (YamlError) {.kind = REDEFINED_ALIAS,
-                         .pos = token.start,
-                         .len = token.length,
+            yp,
+            (YamlError) {// plz clang-format v22 in arch :sob:
+                         .kind = REDEFINED_ALIAS,
                          .got = ya.name,
-                         .exp = ""}
+                         .exp = ""
+            }
           );
         }
       };
 
-      YamlAlias* temp = realloc (
-        tokenizer->aliases.items, (tokenizer->aliases.length + 1) * sizeof (YamlAlias)
-      );
+      YamlAlias* temp =
+        realloc (yp->aliases.items, (yp->aliases.length + 1) * sizeof (YamlAlias));
 
       if (!temp)
         die (
-          "Out of memory allocating %zu bytes",
-          (tokenizer->aliases.length + 1) * sizeof (YamlAlias)
+          "Out of memory allocating %zu bytes", (yp->aliases.length + 1) * sizeof (YamlAlias)
         );
 
-      tokenizer->aliases.items = temp;
-      tokenizer->aliases.items[tokenizer->aliases.length] = ya;
-      tokenizer->aliases.length++;
+      yp->aliases.items = temp;
+      yp->aliases.items[yp->aliases.length] = ya;
+      yp->aliases.length++;
       return value;
     }
 
     case TOKEN_ALIAS: {
-      Node* value = parse_alias (tokenizer, token);
+      Node* value = parse_alias (yp, token);
       if (value) {
         value->rcount++;
         return value;
       }
-      parser_error (
-        tokenizer,
-        (YamlError) {.kind = UNDEFINED_ALIAS,
-                     .pos = token.start,
-                     .len = token.length,
-                     .got = token_value (tokenizer, token),
-                     .exp = ""}
-      );
+      parser_error (yp, (YamlError) {.kind = UNDEFINED_ALIAS, .got = token.raw, .exp = ""});
     }
 
     case TOKEN_STRING:
-    case TOKEN_STRING_LIT:
-      return parse_string (tokenizer, token);
+    case TOKEN_STRING_LIT: {
+      Node* node = create_node (NODE_STRING);
+      node->string = token.raw;
+      return node;
+    }
 
     case TOKEN_NUMBER:
-      return parse_number (tokenizer, token);
+      return parse_number (token);
 
-    case TOKEN_BOOLEAN:
-      return parse_boolean (tokenizer, token);
+    case TOKEN_BOOLEAN: {
+      Node* node = create_node (NODE_BOOLEAN);
+
+      node->boolean = (token.length == 4);
+      return node;
+    }
 
     case TOKEN_OPEN_MAP:
-      tokenizer->root_mark++;
-      return parse_map (tokenizer);
+      yp->root_mark++;
+      return parse_map (yp);
 
     case TOKEN_OPEN_SEQ:
-      return parse_seq (tokenizer);
+      return parse_seq (yp);
 
     default:
       parser_error (
-        tokenizer,
+        yp,
         (YamlError) {
           .kind = UNEXPECTED_TOKEN,
-          .pos = token.start,
-          .len = token.length,
           .got = token_kind_to_string (token.kind),
           .exp = "a value",
         }
@@ -757,33 +821,38 @@ void free_yaml (Node* node) {
   node = nullptr;
 }
 
-Node* parse_yaml (const char* input) {
-  Tokenizer tokenizer = {};
-  tokenizer.input = input;
-  tokenizer.cpos = 0;
-  tokenizer.line = 1;
-  tokenizer.ccol = 1;
-  tokenizer.aliases = (YamlAliasList) {.length = 0, .items = nullptr};
+Node* parse_yaml (const char* filepath) {
+  int file_fd = fd_open_file (filepath);
 
-  Node* root = parse_map (&tokenizer);
-  if (tokenizer.input[tokenizer.cpos] != CHAR_EOF) {
+  if (file_fd < 0) die ("could not open file %s: %s\n", filepath, strerror (errno));
+
+  char input_buf[YAML_CHUNK_SIZE];
+
+  YamlParser yp = {};
+  yp.buff = input_buf;
+  yp.ifd = file_fd;
+  yp.cpos = 0;
+  yp.line = 0;
+  yp.bred = 1;
+  yp.aliases = (YamlAliasList) {.length = 0, .items = nullptr};
+
+  Node* root = parse_map (&yp);
+  if (!eof_reached (&yp)) {
     parser_error (
-      &tokenizer,
+      &yp,
       (YamlError) {
         .kind = UNEXPECTED_TOKEN,
-        .pos = tokenizer.cpos - 1,
-        .len = tokenizer.cur_token.length,
-        .got = token_kind_to_string (tokenizer.cur_token.kind),
+        .got = token_kind_to_string (yp.cur_token.kind),
         .exp = token_kind_to_string (TOKEN_KEY),
       }
     );
   }
 
-  if (tokenizer.aliases.length > 0) {
-    while (tokenizer.aliases.length-- > 0) {
-      free (tokenizer.aliases.items[tokenizer.aliases.length].name);
+  if (yp.aliases.length > 0) {
+    while (yp.aliases.length-- > 0) {
+      free (yp.aliases.items[yp.aliases.length].name);
     }
-    free (tokenizer.aliases.items);
+    free (yp.aliases.items);
   }
 
   return root;
@@ -811,7 +880,6 @@ const char* const token_kind_strings[] = {
   "TOKEN_STRING_LIT",  // 3
   "TOKEN_NUMBER",      // 4
   "TOKEN_BOOLEAN",     // 5
-  "TOKEN_COLON",       // 6
   "TOKEN_COMMA",       // 7
   "TOKEN_ANCHOR",      // 9
   "TOKEN_ALIAS",       // 10
@@ -855,19 +923,21 @@ const uint8_t char_flags[256] = {
 };
 // clang-format on
 
-#ifdef __YAML_TEST
+#ifdef _YAML_TEST
 
 #define node_kind_to_string(kind) node_kind_names[kind]
 
-#define token_dbg(t, token)                                                                  \
-  {                                                                                          \
-    char* v = token_value (t, token);                                                        \
-    printf ("TOKEN: ~%3zu %36s '%s'\n", token.length, token_kind_to_string (token.kind), v); \
-    free (v);                                                                                \
+#define token_dbg(t, token)                                                              \
+  {                                                                                      \
+    char* v = token_value (t, token);                                                    \
+    printf (                                                                             \
+      "TOKEN: ~%3zu %36s '%s'\n", (token).length, token_kind_to_string ((token).kind), v \
+    );                                                                                   \
+    free (v);                                                                            \
   }
 
-[[clang::always_inline]] const char* node_value (Node* node) {
-  static char _buf[20];
+[[clang::always_inline]] static const char* node_value (Node* node) {
+  static char _buf[20];  // NOLINT (readability-magic-numbers)
 
   switch (node->kind) {
     case NODE_STRING:
@@ -876,14 +946,14 @@ const uint8_t char_flags[256] = {
       snprintf (_buf, sizeof (_buf), "%f", node->number);
       return _buf;
     case NODE_BOOLEAN:
-      return node->boolean ? "true" : "false";
+      return (int)node->boolean ? "true" : "false";
     default:
       return "UNKNOWN";
   }
 }
 
 void map_walk (Node* node, int indent);
-void seq_walk (Node* node, int indent) {
+static void seq_walk (Node* node, int indent) {
   for (size_t i = 0; i < node->sequence.size; i++) {
     Node* value = node->sequence.items[i];
     if (value->kind == NODE_MAP) {
@@ -975,41 +1045,34 @@ int main (int argc, char** argv) {
   IGNORE_UNUSED (char* _this_file = popf (argc, argv));
   char* file_name = popf (argc, argv);
 
-  FILE* file = fopen (file_name, "r");
-  fseek (file, 0, SEEK_END);
-  long length = ftell (file);
-  fseek (file, 0, SEEK_SET);
-
-  char* yaml_input = malloc (next_power_of2 (length + 1));
-  IGNORE_UNUSED (fread (yaml_input, 1, length, file));
-  yaml_input[length] = '\0';
-  fclose (file);
-
-  // Tokenizer tokenizer = {};
-  // tokenizer.input = yaml_input;
-  // tokenizer.cpos = 0;
-  // tokenizer.line = 1;
-  // tokenizer.ccol = 1;
-  // tokenizer.aliases = (YamlAliasList){.length = 0, .items = NULL};
-  // while (true) {
-  //   Token token = next_token (&tokenizer);
-  //   token_dbg (&tokenizer, token);
-  //   if (token.kind == TOKEN_UNKNOWN) break;
-  //   if (token.kind == TOKEN_EOF) break;
-  // }
-  // printf ("\n");
-
-  Node* root = parse_yaml (yaml_input);
-
-  if (!root) {
-    errpfmt ("Failed to parse YAML\n");
-    return 1;
+  int file_fd = fd_open_file (file_name);
+  if (file_fd < 0) die ("could not open file %s: %s\n", file_name, strerror (errno));
+  char input_buf[YAML_CHUNK_SIZE];
+  YamlParser yp = {};
+  yp.buff = input_buf;
+  yp.cpos = 0;
+  yp.line = 1;
+  yp.aliases = (YamlAliasList) {.length = 0, .items = nullptr};
+  while (true) {
+    Token token = next_token (&yp);
+    printf (
+      "TOKEN: ~%3hu %36s '%s'\n", (token).length, token_kind_strings[(token).kind], token.raw
+    );
+    if (token.kind == TOKEN_UNKNOWN) break;
+    if (token.kind == TOKEN_EOF) break;
   }
+  printf ("\n");
 
-  map_walk (root, 0);
-  free_yaml (root);
+  // Node* root = parse_yaml (file_name);
+  //
+  // if (!root) {
+  //   errpfmt ("Failed to parse YAML\n");
+  //   return 1;
+  // }
+  //
+  // map_walk (root, 0);
+  // free_yaml (root);
 
-  free (yaml_input);
   return 0;
 }
 #endif
