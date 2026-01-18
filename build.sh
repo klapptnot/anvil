@@ -14,10 +14,42 @@ readonly -a RECIPE=(
   "${THIS_PARENT}/src/yaml.c"
 )
 
+function clang_check {
+  local clangd_cfg="${XDG_CONFIG_HOME:-${HOME}/.config}/clangd/config.yaml"
+  local flags=()
+  local files=()
+
+  # Extract CompileFlags -> Add from the YAML
+  if [[ -f "${clangd_cfg}" ]]; then
+    local in_add=0
+    mapfile -t flags < <(yq -rM '.CompileFlags.Add[]' "${clangd_cfg}")
+  else
+    echo "💢 Config not found at ${clangd_cfg}" >&2
+    return 1
+  fi
+
+  # Determine files to check
+  if [[ ${#} -eq 0 ]]; then
+    # No args? Find all .c and .h files recursively
+    mapfile -t files < <(find . -type f \( -name '*.c' -o -name '*.h' \))
+  else
+    files=("${@}")
+  fi
+
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo "😭 No files to check!" >&2
+    return 1
+  fi
+
+  echo "🔥 Checking ${#files[@]} files with ${#flags[@]} flags from clangd config..."
+
+  clang "-I${LIBS_DIR}" "${flags[@]}" "${files[@]}"
+}
+
 function main {
   [ ! -d "${TARGET_DIR}" ] && mkdir -p "${TARGET_DIR}"
 
-  local operation="${1:?Argument required, one of <exp|run|val>}"
+  local operation="${1:?Argument required, one of <exp|run|val|check>}"
   shift 1
 
   readonly -a C_FLAGS=(
@@ -37,6 +69,11 @@ function main {
     # "-fsanitize=address,undefined,leak"
     # "-fno-omit-frame-pointer"
   )
+
+  if [ "${operation}" == 'check' ]; then
+    clang_check "${@}"
+    exit
+  fi
 
   if [ "${operation}" == 'exp' ]; then
     exec clang -E "-I${LIBS_DIR}" -x c -std=c23 \

@@ -32,11 +32,11 @@ typedef struct {
   size_t len;  // current length (how many items I *am* storing)
   size_t esz;  // size of each item
   void* val;   // void pointer to the actual data
-} VectorZ3;
+} Vector;
 
 //~ Initialize a new dynamic array for a specific type
 #define z3_vec(type)                                         \
-  (VectorZ3) {                                               \
+  (Vector) {                                                 \
     .max = 0, .len = 0, .esz = sizeof (type), .val = nullptr \
   }
 
@@ -47,38 +47,38 @@ typedef struct {
 #define z3_get(vec, idx) ((typeof ((vec).val))((char*)(vec).val + ((idx) * (vec).esz)))
 
 //~ Display the dynamic array
-#define z3_vec_show(vec, type)                                                       \
-  {                                                                                  \
-    printf (#vec " = VectorZ3 {\n  len: %zu,\n  max: %zu,\n", (vec).len, (vec).max); \
-    for (size_t i = 0; i < (vec).len; i++) {                                         \
-      printf ("  [%zu] = ", i);                                                      \
-      _dynarray_print_##type ((type*)z3_get (vec, i));                               \
-      putchar ('\n');                                                                \
-    }                                                                                \
-    printf ("}\n");                                                                  \
+#define z3_vec_show(vec, type)                                                     \
+  {                                                                                \
+    printf (#vec " = Vector {\n  len: %zu,\n  max: %zu,\n", (vec).len, (vec).max); \
+    for (size_t i = 0; i < (vec).len; i++) {                                       \
+      printf ("  [%zu] = ", i);                                                    \
+      _dynarray_print_##type ((type*)z3_get (vec, i));                             \
+      putchar ('\n');                                                              \
+    }                                                                              \
+    printf ("}\n");                                                                \
   }
 
 //~ Print debug information about a dynamic array
-#define z3_vec_dbg(vec)                                                              \
-  {                                                                                  \
-    printf (#vec " = VectorZ3 {\n  len: %zu,\n  max: %zu,\n", (vec).len, (vec).max); \
-    for (size_t i = 0; i < (vec).len; i++) {                                         \
-      printf ("  [%zu] = %p,\n", i, z3_get (vec, i));                                \
-    }                                                                                \
-    printf ("}\n");                                                                  \
+#define z3_vec_dbg(vec)                                                            \
+  {                                                                                \
+    printf (#vec " = Vector {\n  len: %zu,\n  max: %zu,\n", (vec).len, (vec).max); \
+    for (size_t i = 0; i < (vec).len; i++) {                                       \
+      printf ("  [%zu] = %p,\n", i, z3_get (vec, i));                              \
+    }                                                                              \
+    printf ("}\n");                                                                \
   }
 
 //~ Append an item to a dynamic array, resizing if necessary
-#define z3_push(vec, item)                                                                  \
-  {                                                                                         \
-    if ((vec).len >= (vec).max) {                                                           \
-      (vec).max = (((vec).max == 0) ? Z3_VECTOR_INITIAL_CAPACITY : (vec).max * 2);          \
-      /* NOLINTNEXTLINE(bugprone-suspicious-realloc-usage) */                               \
-      (vec).val = realloc ((vec).val, (vec).esz * (vec).max);                               \
-      if ((vec).val == nullptr) die ("VectorZ3 realloc: requested %zu bytes\n", (vec).max); \
-    }                                                                                       \
-    memcpy (z3_get (vec, (vec).len), (void*)&(item), (vec).esz);                            \
-    (vec).len++;                                                                            \
+#define z3_push(vec, item)                                                                \
+  {                                                                                       \
+    if ((vec).len >= (vec).max) {                                                         \
+      (vec).max = (((vec).max == 0) ? Z3_VECTOR_INITIAL_CAPACITY : (vec).max * 2);        \
+      /* NOLINTNEXTLINE(bugprone-suspicious-realloc-usage) */                             \
+      (vec).val = realloc ((vec).val, (vec).esz * (vec).max);                             \
+      if ((vec).val == nullptr) die ("Vector realloc: requested %zu bytes\n", (vec).max); \
+    }                                                                                     \
+    memcpy (z3_get (vec, (vec).len), (void*)&(item), (vec).esz);                          \
+    (vec).len++;                                                                          \
   }
 
 //~ Free the memory used by a dynamic array
@@ -108,38 +108,38 @@ typedef struct {
   }
 
 // A 100% heap-allocated vector
-VectorZ3* z3_vec_heap (size_t element_size);
+Vector* z3_vec_heap (size_t element_size);
 
 #ifdef Z3_TOYS_SCOPED
-//~ Cleanup function for generic VectorZ3 (used with attribute cleanup)
-void __cleanup_VectorZ3_generic_pod (VectorZ3* d);
+//~ Cleanup function for generic Vector (used with attribute cleanup)
+void __cleanup_Vector_generic_pod (Vector* d);
 
-//~ Define a cleanup function for a specific VectorZ3 type
-#define z3_dropfn(TYPE, FUNC)                                  \
-  static inline void __cleanup_VectorZ3_##TYPE (VectorZ3* d) { \
-    for (size_t i = 0; i < d->len; i++) {                      \
-      FUNC ((TYPE*)((uintptr_t)d->val + (i) * d->esz));        \
-    }                                                          \
-    free (d->val);                                             \
-    d->val = nullptr;                                          \
-    d->len = 0;                                                \
-    d->esz = 0;                                                \
-    d->max = 0;                                                \
-  }                                                            \
-  static inline void __cleanup_VectorZ3_##TYPE (VectorZ3* d)
+//~ Define a cleanup function for a specific Vector type
+#define z3_dropfn(TYPE, FUNC)                              \
+  static inline void __cleanup_Vector_##TYPE (Vector* d) { \
+    for (size_t i = 0; i < d->len; i++) {                  \
+      FUNC ((TYPE*)((uintptr_t)d->val + (i) * d->esz));    \
+    }                                                      \
+    free (d->val);                                         \
+    d->val = nullptr;                                      \
+    d->len = 0;                                            \
+    d->esz = 0;                                            \
+    d->max = 0;                                            \
+  }                                                        \
+  static inline void __cleanup_Vector_##TYPE (Vector* d)
 
-//~ Define a VectorZ3 with automatic cleanup for a specific type
-#define ScopedVectorZ3_(TYPE) __attribute__ ((cleanup (__cleanup_VectorZ3_##TYPE))) VectorZ3
+//~ Define a Vector with automatic cleanup for a specific type
+#define ScopedVector_(TYPE) __attribute__ ((cleanup (__cleanup_Vector_##TYPE))) Vector
 
-//~ Define a VectorZ3 with automatic generic cleanup
-#define ScopedVectorZ3 __attribute__ ((cleanup (__cleanup_VectorZ3_generic_pod))) VectorZ3
+//~ Define a Vector with automatic generic cleanup
+#define ScopedVector __attribute__ ((cleanup (__cleanup_Vector_generic_pod))) Vector
 #endif  // Z3_TOYS_SCOPED
 
 #ifdef Z3_VECTOR_IMPL
 
 #ifdef Z3_TOYS_SCOPED
-//~ Cleanup function for generic VectorZ3 (used with attribute cleanup)
-void __cleanup_VectorZ3_generic_pod (VectorZ3* d) {
+//~ Cleanup function for generic Vector (used with attribute cleanup)
+void __cleanup_Vector_generic_pod (Vector* d) {
   if (!d || !d->val) return;
 
   free (d->val);
@@ -150,8 +150,8 @@ void __cleanup_VectorZ3_generic_pod (VectorZ3* d) {
 }
 
 // Define a heap-allocated vector function (not a macro)
-inline VectorZ3* z3_vec_heap (size_t element_size) {
-  VectorZ3* vec = (VectorZ3*)malloc (sizeof (VectorZ3));
+inline Vector* z3_vec_heap (size_t element_size) {
+  Vector* vec = (Vector*)malloc (sizeof (Vector));
   if (vec) {
     vec->max = 0;
     vec->len = 0;

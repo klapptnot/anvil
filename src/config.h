@@ -11,10 +11,10 @@
 #define DEFAULT_TARGET_PATH "#{AWD}/target"
 
 typedef struct {
-  const char* validate_str;
+  const char* validation;
   const char* cache_policy;
-  const char** commands;
-  size_t commands_count;
+  const char** command;
+  size_t command_len;
 } ArgumentConfig;
 
 typedef struct {
@@ -27,8 +27,9 @@ typedef struct {
 typedef struct {
   const char* compiler;
   const char* cstd;
-  Z3HashMap* macros;
-  Z3HashMap* arguments;
+  size_t jobs;
+  HashMap* macros;
+  HashMap* arguments;
   DependencyConfig* deps;
   size_t deps_count;
 } BuildConfig;
@@ -64,7 +65,7 @@ typedef struct {
   WorkspaceConfig* workspace;
   BuildTarget* targets;
   BuildConfig* build;
-  Z3HashMap* profiles;
+  HashMap* profiles;
 } AnvilConfig;
 
 // Sets up an ArgumentConfig structure based on the provided YAML node.
@@ -77,7 +78,7 @@ void dset_dependency_config (DependencyConfig* dcon, Node* node);
 void dset_workspace_config (WorkspaceConfig* wconf, Node* node);
 
 // Sets up a ProfileConfig structure based on the provided YAML node.
-void dset_profile_config (Z3HashMap* pconf, Node* node);
+void dset_profile_config (HashMap* pconf, Node* node);
 
 // Sets up a TargetConfig structure based on the provided YAML node.
 void dset_target_config (BuildTarget* tconf, Node* node);
@@ -88,8 +89,7 @@ void dset_build_config (BuildConfig* bconf, Node* node);
 // Sets up an AnvilConfig structure based on the provided YAML node.
 void dset_anvil_config (AnvilConfig* conf, Node* node);
 
-
-void free_profile_config (Z3HashMap* pconf);
+void free_profile_config (HashMap* pconf);
 void free_target_config (BuildTarget* tconf);
 void free_build_config (BuildConfig* bconf);
 void free_anvil_config (AnvilConfig* conf);

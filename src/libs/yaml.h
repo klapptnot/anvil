@@ -26,6 +26,7 @@
  */
 #pragma once
 
+#include <stdint.h>
 #ifndef __STDC_VERSION__
 #error A modern C standard (like C23) is required
 #elif __STDC_VERSION__ != 202311L
@@ -35,6 +36,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+
+#define STACK_VALUE_BUFFER_SIZE 256        // max stack value size before heap
+#define HEAP_VALUE_MIN_SIZE     16         // small values: keys, booleans
+#define MAX_ERROR_LINE_LENGTH   512        // terminal-friendly line length
+#define NODE_INITIAL_CAPACITY   8          // typical YAML node child count
+#define YAML_CHUNK_SIZE         (1 << 12)  // 4 KB (page-aligned I/O)
 
 // Single characters with specific meanings in YAML syntax
 enum YamlChar {
@@ -75,7 +82,6 @@ typedef enum {
   TOKEN_STRING_LIT,  // Literal string token
   TOKEN_NUMBER,      // Numeric value token
   TOKEN_BOOLEAN,     // Boolean (true/false) token
-  TOKEN_COLON,       // Separator token
   TOKEN_COMMA,       // Collection element separator
   TOKEN_ANCHOR,      // Anchor definition token
   TOKEN_ALIAS,       // Alias reference token
@@ -105,12 +111,10 @@ typedef enum {
 
 // Structured error information for detailed error reporting
 typedef struct {
+  uint32_t _padding;   // hmm
   YamlErrorKind kind;  // Type of error encountered
-  int _padding;        // hmm
   const char* exp;     // Expected token/context
   const char* got;     // Actual token/context received
-  size_t pos;          // Error position in input
-  size_t len;          // Length of problematic section
 } YamlError;
 
 // Enumeration of possible node types in parsed YAML
@@ -125,12 +129,9 @@ typedef enum {
 
 // Token representation with detailed metadata
 typedef struct {
-  TokenKind kind;  // Type of token
-  int _padding;    // hmm
-  size_t start;    // Starting position in input
-  size_t length;   // Token length
-  size_t line;     // Line number
-  size_t column;   // Column position
+  TokenKind kind;   // Type of token
+  uint32_t length;  // Token length
+  char* raw;        // Starting position in input
 } Token;
 
 // Recursive node structure for representing YAML data
@@ -158,7 +159,7 @@ typedef struct {
 
 struct Node {
   NodeKind kind;        // Type of node
-  unsigned int rcount;  // Reference count (Alias reference count)
+  unsigned int rcount;  // Reference count (for &name -> *name)
   union {
     char* string;       // String node value
     double number;      // Numeric node value
@@ -180,24 +181,19 @@ typedef struct {
   size_t length;     // Number of aliases
 } YamlAliasList;
 
-// Tokenizer state tracking for parsing
+// Tokenizer state tracking for parsing (weird sized for padding sense, todo)
 typedef struct {
-  size_t root_mark;       // boolean, size_t just for padding
-  const char* input;      // Input YAML string
-  size_t cpos;            // Current parsing position
-  size_t line;            // Current line number
-  size_t ccol;            // Current column
+  int ifd;                // Input YAML file descriptor
+  uint16_t blen;          // Buffer len
+  uint16_t bred;          // Last buf read
+  char* buff;             // Current content buffer
+  uint16_t cpos;          // Current buffer position
+  uint16_t line;          // Current line number
+  uint16_t lpos;          // Current pos in line
+  uint16_t root_mark;     // Levels of indentation + rules
   YamlAliasList aliases;  // Tracked aliases
   Token cur_token;        // Most recently parsed token
-} Tokenizer;
-
-typedef struct {
-  int current_node;  // Currently processed node type
-  Tokenizer t;
 } YamlParser;
-
-// Terminate parsing with a detailed error message
-void parser_error (Tokenizer* tokenizer, YamlError error) __attribute__ ((__noreturn__));
 
 // Recursively free memory allocated for a node
 void free_node (Node* node);
@@ -209,7 +205,7 @@ void map_add (Map* map, char* key, Node* value);
 void sequence_add (Sequence* seq, Node* item);
 
 // Top-level function to parse an entire YAML input string
-Node* parse_yaml (const char* input) __attribute__ ((ownership_holds (malloc, 1)));
+Node* parse_yaml (const char* filepath) __attribute__ ((ownership_holds (malloc, 1)));
 
 // Free all resources associated with a parsed YAML node
 void free_yaml (Node* node);

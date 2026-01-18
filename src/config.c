@@ -15,23 +15,23 @@
 void dset_argument_config (ArgumentConfig* acon, Node* node) {
   if (!node || node->kind != NODE_MAP) return;
 
-  Node* vstr = map_get_node (node, "validate_str");
-  acon->validate_str = (vstr && vstr->kind == NODE_STRING) ? vstr->string : nullptr;
+  Node* vstr = map_get_node (node, "validation");
+  acon->validation = (vstr && vstr->kind == NODE_STRING) ? vstr->string : nullptr;
 
   Node* cpol = map_get_node (node, "cache_policy");
   acon->cache_policy = (cpol && cpol->kind == NODE_STRING) ? cpol->string : nullptr;
 
-  Node* cmds = map_get_node (node, "commands");
+  Node* cmds = map_get_node (node, "command");
   if (cmds && cmds->kind == NODE_SEQUENCE) {
-    acon->commands_count = cmds->sequence.size;
-    acon->commands = (const char**)malloc (sizeof (char*) * acon->commands_count);
-    for (size_t i = 0; i < acon->commands_count; i++) {
+    acon->command_len = cmds->sequence.size;
+    acon->command = (const char**)malloc (sizeof (char*) * acon->command_len);
+    for (size_t i = 0; i < acon->command_len; i++) {
       Node* item = cmds->sequence.items[i];
-      acon->commands[i] = (item && item->kind == NODE_STRING) ? item->string : nullptr;
+      acon->command[i] = (item && item->kind == NODE_STRING) ? item->string : nullptr;
     }
   } else {
-    acon->commands = nullptr;
-    acon->commands_count = 0;
+    acon->command = nullptr;
+    acon->command_len = 0;
   }
 }
 
@@ -58,18 +58,18 @@ void dset_workspace_config (WorkspaceConfig* wconf, Node* node) {
   if (wlibs && wlibs->kind == NODE_STRING) {
     wconf->libs = wlibs->string;
   } else {
-    wconf->libs = nullptr;
+    wconf->libs = DEFAULT_LIBS_PATH;
   }
 
   Node* wtarget = map_get_node (node, "target");
   if (wtarget && wtarget->kind == NODE_STRING) {
     wconf->target = wtarget->string;
   } else {
-    wconf->target = nullptr;
+    wconf->target = DEFAULT_TARGET_PATH;
   }
 }
 
-void dset_profile_config (Z3HashMap* pconf, Node* node) {
+void dset_profile_config (HashMap* pconf, Node* node) {
   if (!node || node->kind != NODE_MAP) return;
 
   for (size_t i = 0; i < node->map.size; ++i) {
@@ -78,7 +78,7 @@ void dset_profile_config (Z3HashMap* pconf, Node* node) {
 
     if (!key || !val || val->kind != NODE_SEQUENCE) continue;
 
-    VectorZ3* flags = z3_new_vec (char*);
+    Vector* flags = z3_new_vec (char*);
     for (size_t j = 0; j < val->sequence.size; j++) {
       Node* vi = val->sequence.items[j];
       if (vi && vi->kind == NODE_STRING) {
@@ -97,6 +97,7 @@ void dset_target_config (BuildTarget* tconf, Node* node) {
     tconf->target = nullptr;
     return;
   }
+
   tconf->count = node->sequence.size;
   tconf->target = (TargetConfig**)malloc (sizeof (TargetConfig) * node->sequence.size);
   for (size_t i = 0; i < node->sequence.size; i++) {
@@ -111,7 +112,7 @@ void dset_target_config (BuildTarget* tconf, Node* node) {
     Node* main = map_get_node (tnode, "main");
     tari->main = (main && main->kind == NODE_STRING) ? main->string : nullptr;
 
-    tnode = map_get_node (tnode, "target");
+    tnode = map_get_node (tnode, "for");
     if (tnode && tnode->kind == NODE_SEQUENCE) {
       tari->target_count = tnode->sequence.size;
       tari->target = (const char**)malloc (sizeof (char*) * tnode->sequence.size);
@@ -133,6 +134,9 @@ void dset_build_config (BuildConfig* bconf, Node* node) {
 
   Node* std = map_get_node (node, "cstd");
   bconf->cstd = (std && std->kind == NODE_STRING) ? std->string : nullptr;
+
+  Node* jobs = map_get_node (node, "jobs");
+  bconf->jobs = (jobs && jobs->kind == NODE_NUMBER) ? (size_t)jobs->number : 0;
 
   // --- macros hashmap ---
   Node* macros = map_get_node (node, "macros");
@@ -249,13 +253,13 @@ void free_target_config (BuildTarget* tconf) {
   free (tconf);
 }
 
-void free_profile_config (Z3HashMap* pconf) {
+void free_profile_config (HashMap* pconf) {
   if (!pconf) return;
 
-  // Iterate through hashmap and free each Z3Vector
-  Z3HashMapIterator it = z3_hashmap_iterator (pconf);
+  // Iterate through hashmap and free each Vector
+  HashMapIterator it = z3_hashmap_iterator (pconf);
   while (z3_hashmap_iter_next (&it)) {
-    VectorZ3* flags = (VectorZ3*)it.val;
+    Vector* flags = (Vector*)it.val;
     // Vector elements are owned by Node tree
     if (flags) z3_drop_vec (*flags);
   }
@@ -274,11 +278,11 @@ void free_build_config (BuildConfig* bconf) {
   }
 
   if (bconf->arguments) {
-    Z3HashMapIterator it = z3_hashmap_iterator (bconf->arguments);
+    HashMapIterator it = z3_hashmap_iterator (bconf->arguments);
     while (z3_hashmap_iter_next (&it)) {
       ArgumentConfig* argconf = (ArgumentConfig*)it.val;
       if (argconf) {
-        free ((void*)argconf->commands);
+        free ((void*)argconf->command);
       }
     }
     z3_hashmap_drop (bconf->arguments);

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2025-present Klapptnot
 
+#include "build.h"
+
 #include <bits/types/time_t.h>
 #include <ctype.h>
 #include <errno.h>
@@ -14,10 +16,10 @@
 #include <unistd.h>
 #include <z3_string.h>
 #include <z3_vector.h>
-#include "z3_toys.h"
-#include "build.h"
 
-bool target_needs_rebuild (String *target, VectorZ3 deps) {
+#include "z3_toys.h"
+
+bool target_needs_rebuild (String* target, Vector deps) {
   struct stat target_stat;
 
   // target doesn't exist
@@ -29,14 +31,16 @@ bool target_needs_rebuild (String *target, VectorZ3 deps) {
   time_t target_mtime = target_stat.st_mtime;
 
   for (size_t i = 0; i < deps.len; i++) {
-    String *dep = z3_get (deps, i);
+    String* dep = z3_get (deps, i);
 
     struct stat dep_stat;
 
     if (stat (dep->chr, &dep_stat) != 0) {
       die (
-          "Dependency '%s' for target '%s' doesn't exist or can't be accessed: %s\n", dep->chr,
-          target->chr, strerror (errno)
+        "Dependency '%s' for target '%s' doesn't exist or can't be accessed: %s\n",
+        dep->chr,
+        target->chr,
+        strerror (errno)
       );
     }
 
@@ -49,7 +53,7 @@ bool target_needs_rebuild (String *target, VectorZ3 deps) {
   return false;
 }
 
-void parse_dependencies (String *rule_str, VectorZ3 *deps) {
+void parse_dependencies (String* rule_str, Vector* deps) {
   size_t i = 0;
   while (i < rule_str->len && rule_str->chr[i] != ':') i++;
   if (i >= rule_str->len) return;
@@ -76,6 +80,6 @@ void parse_dependencies (String *rule_str, VectorZ3 *deps) {
   }
 }
 
-// void get_make_dependencies (BuildConfig *config, VectorZ3 *deps) {
+// void get_make_dependencies (BuildConfig *config, Vector *deps) {
 //   //
 // }

@@ -51,7 +51,7 @@
 #endif
 
 //~ Print formatted error message to stderr with red coloring
-#define errpfmt(fmt, ...)                                                     \
+#define errpfmt(fmt, ...)                                                    \
   /* NOLINT (cert-err33-c) */ fprintf (                                      \
     stderr, "\x1b[38;5;9m[ERROR] " fmt "\x1b[0m" __VA_OPT__ (, ) __VA_ARGS__ \
   )
@@ -62,7 +62,7 @@
 
 #define die(fmt, ...)                            \
   {                                              \
-    eprintf (fmt, __VA_ARGS__);  \
+    errpfmt (fmt, __VA_ARGS__);                  \
     /* NOLINT (cert-err33-c) */ fflush (stderr); \
     _exit (1);                                   \
   }
