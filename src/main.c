@@ -141,18 +141,6 @@ int main (int argc, char** argv) {
   IGNORE_UNUSED (char* _this_file = popf (argc, argv));  // NOLINT (concurrency-mt-unsafe)
   char* file_name = popf (argc, argv);                   // NOLINT (concurrency-mt-unsafe)
 
-  // FILE* file = fopen (file_name, "r");
-  // CHECK_OR_RETURN (fseek (file, 0, SEEK_END), 1);
-  // long length = ftell (file);
-  // CHECK_OR_RETURN (fseek (file, 0, SEEK_SET), 1);
-  // CHECK_OR_RETURN (length, 1);
-  // size_t file_size = (size_t)length;
-  //
-  // char* yaml_input = malloc (next_power_of2 (file_size + 1));
-  // if (fread (yaml_input, 1, file_size, file) != file_size) return 1;
-  // yaml_input[file_size] = '\0';
-  // CHECK_OR_RETURN (fclose (file), 1);
-
   Node* root = parse_yaml (file_name);
 
   if (!root) {

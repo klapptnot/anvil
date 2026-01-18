@@ -42,12 +42,13 @@ static int fd_open_file (const char* filepath) {
 }
 
 static ssize_t refill_buffers (YamlParser* yp) {
-  ssize_t n = read (yp->ifd, yp->buff, YAML_CHUNK_SIZE);
+  ssize_t n = read (yp->ifd, yp->chunk, YAML_CHUNK_SIZE);
+  // NOLINTNEXTLINE (concurrency-mt-unsafe)
   if (n < 0) die ("could not continue reading file: %s", strerror (errno));
 
   yp->cpos = 0;
   yp->blen = (uint16_t)n;
-  yp->bred = (uint16_t)n;
+  yp->lred = (uint16_t)n;
   return n;
 }
 
@@ -62,7 +63,7 @@ extern const uint8_t char_flags[256];
 // Peek at current character without advancing the position
 [[clang::always_inline]]
 static char peek_char (YamlParser* yp) {
-  return yp->buff[yp->cpos];
+  return yp->chunk[yp->cpos];
 }
 
 [[clang::always_inline]]
@@ -72,7 +73,7 @@ static Token peek_token (YamlParser* yp) {
 
 [[clang::always_inline]]
 static bool eof_reached (YamlParser* yp) {
-  return (yp->bred == 0 && yp->cpos >= yp->blen) != 0;
+  return (yp->blen > 0 && yp->cpos >= yp->blen) != 0;
 }
 
 [[clang::always_inline]]
@@ -83,10 +84,6 @@ static void skip_char (YamlParser* yp) {
   } else {
     yp->lpos++;
   }
-
-  // buffer is empty (read did not refill cuz EOF), and still, not handled
-  // not dying is just making it loop because caller did not handle, and won't
-  if (yp->blen == 0 && yp->bred == 0) die ("Check who called me I should not get to skip if EOF :anger:");
   if (++yp->cpos >= yp->blen) refill_buffers (yp);
 }
 
@@ -100,8 +97,8 @@ static void skip_comment (YamlParser* yp) {
 // skip and count whitespace (excluding newlines)
 static void skip_whitespace (YamlParser* yp) {
   while (peek_char (yp) == CHAR_SPACE) {
-    skip_char (yp);
     if (eof_reached (yp)) return;
+    skip_char (yp);
   }
 
   if (peek_char (yp) == CHAR_TAB) {
@@ -126,7 +123,10 @@ static char skip_all_whitespace (YamlParser* yp) {
     // it IS a newline, do-while
     yp->lpos = 0;
     do {
-      if (++yp->cpos >= YAML_CHUNK_SIZE) refill_buffers (yp);
+      if (++yp->cpos >= yp->blen) {
+        if (eof_reached (yp)) break;
+        refill_buffers (yp);
+      }
       yp->line++;
     } while (peek_char (yp) == CHAR_NEWLINE);
   }
@@ -138,15 +138,10 @@ static char skip_all_whitespace (YamlParser* yp) {
     .kind = (k), .raw = (v), .length = (l) \
   }
 
-#define create_token_lit(k, v)                                        \
-  (Token) {                                                           \
-    .kind = (k), .raw = (char*)strdup (v), .length = (sizeof (v) - 1) \
-  }
-
 static Token try_string_unesc (YamlParser* yp) {
   skip_char (yp);  // skip opening quote
 
-  String s = z3_str (HEAP_VALUE_MIN_SIZE);
+  ScopedString s = z3_str (HEAP_VALUE_MIN_SIZE);
   char ilubsm[STACK_VALUE_BUFFER_SIZE];
   uint16_t len = 0;
   while (!eof_reached (yp) && peek_char (yp) != CHAR_QUOTE_DOUBLE &&
@@ -243,14 +238,13 @@ static Token try_anchor_or_alias (YamlParser* yp, enum TagKind ident_flag) {
   return (yp->cur_token = create_token (kind, s.chr, (uint32_t)s.len));
 }
 
-static Token try_token_number (YamlParser* yp) {
-  String s = z3_str (HEAP_VALUE_MIN_SIZE);
+static bool try_token_number (YamlParser* yp, String* s) {
   char ilubsm[STACK_VALUE_BUFFER_SIZE];
   uint16_t len = 0;
 
   while (!eof_reached (yp) && is_number_parseable (peek_char (yp))) {
     if (len >= STACK_VALUE_BUFFER_SIZE) {
-      z3_pushl (&s, ilubsm, len);
+      z3_pushl (s, ilubsm, len);
       len = 0;
     }
     ilubsm[len++] = peek_char (yp);
@@ -259,69 +253,41 @@ static Token try_token_number (YamlParser* yp) {
 
   if (!eof_reached (yp) && peek_char (yp) != CHAR_SPACE) {
     // definitively a number
-    if (len > 0) z3_pushl (&s, ilubsm, len);
-    return create_token (TOKEN_NUMBER, s.chr, (uint32_t)s.len);
+    if (len > 0) z3_pushl (s, ilubsm, len);
+    return true;
   }
 
-  // Not a number, caller should try other parsers
-  z3_drops (&s);
-  return (Token) {.kind = TOKEN_UNKNOWN, .raw = nullptr, .length = 0};
+  return false;
 }
 
-static Token try_boolean (YamlParser* yp, char first_char) {
-  if (first_char == 't') {
-    // Try to match "true"
-    if (!eof_reached (yp) && peek_char (yp) == 't') {
-      skip_char (yp);
-      if (!eof_reached (yp) && peek_char (yp) == 'r') {
-        skip_char (yp);
-        if (!eof_reached (yp) && peek_char (yp) == 'u') {
-          skip_char (yp);
-          if (!eof_reached (yp) && peek_char (yp) == 'e') {
-            skip_char (yp);
-            if ((int)eof_reached (yp) || peek_char (yp) == CHAR_SPACE ||
-                peek_char (yp) == CHAR_NEWLINE) {
-              return create_token_lit (TOKEN_BOOLEAN, "true");
-            }
-          }
-        }
-      }
+static bool try_boolean (YamlParser* yp, String* s) {
+  const char* pattern = (peek_char (yp) == 't') ? "true" : "false";
+
+  for (size_t i = 0; pattern[i] != '\0'; i++) {
+    if ((int)eof_reached (yp) || peek_char (yp) != pattern[i]) {
+      z3_pushl (s, pattern, i);  // trx -> i == 2 -> push tr and leaves x
+      return false;
     }
-  } else if (first_char == 'f') {
-    // Try to match "false"
-    if (!eof_reached (yp) && peek_char (yp) == 'f') {
-      skip_char (yp);
-      if (!eof_reached (yp) && peek_char (yp) == 'a') {
-        skip_char (yp);
-        if (!eof_reached (yp) && peek_char (yp) == 'l') {
-          skip_char (yp);
-          if (!eof_reached (yp) && peek_char (yp) == 's') {
-            skip_char (yp);
-            if (!eof_reached (yp) && peek_char (yp) == 'e') {
-              skip_char (yp);
-              if ((int)eof_reached (yp) || peek_char (yp) == CHAR_SPACE ||
-                  peek_char (yp) == CHAR_NEWLINE) {
-                return create_token_lit (TOKEN_BOOLEAN, "false");
-              }
-            }
-          }
-        }
-      }
-    }
+    skip_char (yp);
   }
 
-  // Not a boolean, caller should try other parsers
-  return (Token) {.kind = TOKEN_UNKNOWN, .raw = nullptr, .length = 0};
+  // NOLINTNEXTLINE (readability-magic-numbers) 4 and 5 are obvious here
+  z3_pushl (s, pattern, pattern[4] == '\0' ? 4 : 5);
+
+  if (eof_reached (yp)) return true;
+
+  char c = peek_char (yp);
+  return (c == CHAR_SPACE || c == CHAR_NEWLINE || c == CHAR_COMMA || c == CHAR_CLOSE_BRACE ||
+          c == CHAR_CLOSE_BRACKET) != 0;
 }
 
-static Token try_key (YamlParser* yp) {
-  String s = z3_str (HEAP_VALUE_MIN_SIZE);
+static Token try_key (YamlParser* yp, String* s) {
   char ilubsm[STACK_VALUE_BUFFER_SIZE];
   uint16_t len = 0;
 
   // First character already peeked by caller, collect it
   if (len >= STACK_VALUE_BUFFER_SIZE) {
-    z3_pushl (&s, ilubsm, len);
+    z3_pushl (s, ilubsm, len);
     len = 0;
   }
   ilubsm[len++] = peek_char (yp);
@@ -335,7 +301,7 @@ static Token try_key (YamlParser* yp) {
 
       // Colon wasn't followed by space/EOF, include it in key
       if (len >= STACK_VALUE_BUFFER_SIZE) {
-        z3_pushl (&s, ilubsm, len);
+        z3_pushl (s, ilubsm, len);
         len = 0;
       }
       ilubsm[len++] = CHAR_COLON;
@@ -343,17 +309,18 @@ static Token try_key (YamlParser* yp) {
     }
 
     if (len >= STACK_VALUE_BUFFER_SIZE) {
-      z3_pushl (&s, ilubsm, len);
+      z3_pushl (s, ilubsm, len);
       len = 0;
     }
     ilubsm[len++] = peek_char (yp);
     skip_char (yp);
   }
 
-  if (len > 0) z3_pushl (&s, ilubsm, len);
+  if (len > 0) z3_pushl (s, ilubsm, len);
 
-  return (yp->cur_token = create_token (TOKEN_KEY, s.chr, (uint32_t)s.len));
+  return (yp->cur_token = create_token (TOKEN_KEY, s->chr, (uint32_t)s->len));
 }
+
 static Token next_token (YamlParser* yp) {
   enum TagKind ident_flag = TAG_NULL;
 go_back_to_start:
@@ -390,30 +357,24 @@ go_back_to_start:
     case CHAR_CLOSE_BRACE:
     case CHAR_CLOSE_BRACKET: {
       TokenKind type;
-      const char* lit;
       switch (c) { /* NOLINT (bugprone-switch-missing-default-case) literally never */
         case CHAR_COMMA:
           type = TOKEN_COMMA;
-          lit = ",";
           break;
         case CHAR_OPEN_BRACE:
           type = TOKEN_OPEN_MAP;
-          lit = "{";
           break;
         case CHAR_OPEN_BRACKET:
           type = TOKEN_OPEN_SEQ;
-          lit = "[";
           break;
         case CHAR_CLOSE_BRACE:
           type = TOKEN_CLOSE_MAP;
-          lit = "}";
           break;
         case CHAR_CLOSE_BRACKET:
           type = TOKEN_CLOSE_SEQ;
-          lit = "]";
           break;
       }
-      yp->cur_token = create_token_lit (type, lit);
+      yp->cur_token = (Token) {.kind = (type), .raw = nullptr, .length = 1};
       skip_char (yp);
       return yp->cur_token;
     }
@@ -425,23 +386,25 @@ go_back_to_start:
       return try_string_lit (yp);
 
     default:
+      if (eof_reached (yp)) goto go_back_to_start;
+
       if (ident_flag != TAG_NULL) {
         return try_anchor_or_alias (yp, ident_flag);
       }
 
+      String s = z3_str (HEAP_VALUE_MIN_SIZE);
+
       if (is_number_parseable (c)) {
-        Token num_token = try_token_number (yp);
-        if (num_token.kind != TOKEN_UNKNOWN) return num_token;
-        // Fall through to boolean/key parsing if not a number
+        if (try_token_number (yp, &s))
+          return (Token) {.kind = TOKEN_NUMBER, .raw = s.chr, .length = (uint32_t)s.len};
       }
 
       if (c == 't' || c == 'f') {
-        Token bool_token = try_boolean (yp, c);
-        if (bool_token.kind != TOKEN_UNKNOWN) return bool_token;
-        // Fall through to key parsing if not a boolean
+        if (try_boolean (yp, &s))
+          return (Token) {.kind = TOKEN_BOOLEAN, .raw = s.chr, .length = (uint32_t)s.len};
       }
 
-      return try_key (yp);
+      return try_key (yp, &s);
   }
 }
 
@@ -584,6 +547,7 @@ static Node* parse_number (Token token) {
 
   node->number = strtod (value, nullptr);
   free (ver_value);
+  free (token.raw);
   return node;
 }
 
@@ -665,12 +629,10 @@ static Node* parse_map (YamlParser* yp) {
       goto unexpected_token_inloop;
     }
 
-    char* key = token.raw;
-
-    if (token.length == 2 && !memcmp (key, "<<", 2)) {
+    if (token.length == 2 && !memcmp (token.raw, "<<", 2)) {
       // this is… not ideal, but doing this way, stops earlier
       char c = skip_all_whitespace (yp);
-      free (key);
+      free (token.raw);
 
       if (c != CHAR_OPEN_BRACE && c != CHAR_ASTERISK) {
         token = next_token (yp);  // just needed for error
@@ -702,7 +664,7 @@ static Node* parse_map (YamlParser* yp) {
     }
 
     Node* val = parse_value (yp);
-    map_add (&node->map, key, val);
+    map_add (&node->map, token.raw, val);
 
     continue;
 
@@ -805,6 +767,7 @@ Node* parse_value (YamlParser* yp) {
       return parse_seq (yp);
 
     default:
+      errpfmt ("unweachabwe :3\n");
       parser_error (
         yp,
         (YamlError) {
@@ -824,17 +787,18 @@ void free_yaml (Node* node) {
 Node* parse_yaml (const char* filepath) {
   int file_fd = fd_open_file (filepath);
 
+  // NOLINTNEXTLINE (concurrency-mt-unsafe)
   if (file_fd < 0) die ("could not open file %s: %s\n", filepath, strerror (errno));
 
-  char input_buf[YAML_CHUNK_SIZE];
+  char yaml_chunk[YAML_CHUNK_SIZE];
 
-  YamlParser yp = {};
-  yp.buff = input_buf;
+  YamlParser yp = {0};
+  yp.chunk = yaml_chunk;
   yp.ifd = file_fd;
-  yp.cpos = 0;
-  yp.line = 0;
-  yp.bred = 1;
   yp.aliases = (YamlAliasList) {.length = 0, .items = nullptr};
+
+  refill_buffers (&yp);
+  if (eof_reached (&yp)) die ("File is empty");
 
   Node* root = parse_map (&yp);
   if (!eof_reached (&yp)) {
@@ -1043,35 +1007,43 @@ void map_walk (Node* node, int indent) {
 // therefore it does not need any malloc nor free
 int main (int argc, char** argv) {
   IGNORE_UNUSED (char* _this_file = popf (argc, argv));
-  char* file_name = popf (argc, argv);
+  char* filename = popf (argc, argv);
+  char* hmmm = argv[0];
 
-  int file_fd = fd_open_file (file_name);
-  if (file_fd < 0) die ("could not open file %s: %s\n", file_name, strerror (errno));
-  char input_buf[YAML_CHUNK_SIZE];
-  YamlParser yp = {};
-  yp.buff = input_buf;
-  yp.cpos = 0;
-  yp.line = 1;
-  yp.aliases = (YamlAliasList) {.length = 0, .items = nullptr};
-  while (true) {
-    Token token = next_token (&yp);
-    printf (
-      "TOKEN: ~%3hu %36s '%s'\n", (token).length, token_kind_strings[(token).kind], token.raw
-    );
-    if (token.kind == TOKEN_UNKNOWN) break;
-    if (token.kind == TOKEN_EOF) break;
+  if (hmmm) {
+    int file_fd = fd_open_file (filename);
+    if (file_fd < 0)
+      die (
+        "could not open file %s: %s\n", filename, strerror (errno)
+      );  // NOLINT (concurrency-mt-unsafe)
+    char input_buf[YAML_CHUNK_SIZE];
+    YamlParser yp = {};
+    yp.chunk = input_buf;
+    yp.ifd = file_fd;
+    yp.cpos = 0;
+    yp.line = 1;
+    yp.aliases = (YamlAliasList) {.length = 0, .items = nullptr};
+    refill_buffers (&yp);
+    while (true) {
+      Token token = next_token (&yp);
+      printf (
+        "TOKEN: ~%3hu %36s '%s'\n", (token).length, token_kind_strings[(token).kind], token.raw
+      );
+      if (token.kind == TOKEN_UNKNOWN) break;
+      if (token.kind == TOKEN_EOF) break;
+    }
+    printf ("\n");
   }
-  printf ("\n");
 
-  // Node* root = parse_yaml (file_name);
-  //
-  // if (!root) {
-  //   errpfmt ("Failed to parse YAML\n");
-  //   return 1;
-  // }
-  //
-  // map_walk (root, 0);
-  // free_yaml (root);
+  Node* root = parse_yaml (filename);
+
+  if (!root) {
+    errpfmt ("Failed to parse YAML\n");
+    return 1;
+  }
+
+  map_walk (root, 0);
+  free_yaml (root);
 
   return 0;
 }

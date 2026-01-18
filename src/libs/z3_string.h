@@ -32,13 +32,19 @@ typedef struct {
   char* chr;  /**< Pointer to the character array */
 } String;
 
+//~ Heap-allocated string slice
+typedef struct {
+  size_t len; /**< String slice length */
+  const char* chr;
+} StringSlice;
+
 //~ Print debug information about a string
 #define z3_str_dbg(s)                                                                       \
   printf (                                                                                  \
     #s " = String {\n  len: %zu,\n  max: %zu,\n  chr: '%s'\n}\n", (s).len, (s).max, (s).chr \
   );
 
-#define z3_pushlit(vec, lit) z3_pushl (vec, lit, sizeof (lit) - 1)
+#define z3_pushlit(str, lit) z3_pushl (str, lit, sizeof (lit) - 1)
 
 //~ Create a new empty String, with at least `min` capacity
 String z3_str (size_t min);

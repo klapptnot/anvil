@@ -77,7 +77,7 @@ static bool parser_filler (String* res, void* ctx, char* item, size_t len) {
   }
 }
 
-[[noreturn]]
+[[noreturn]] [[maybe_unused]]
 static void parser_error (YamlParser* yp, YamlError error) {
   // Error messages corresponding to YamlError enum
   const char* yaml_error_messages[] = {
@@ -91,7 +91,6 @@ static void parser_error (YamlParser* yp, YamlError error) {
     "Comma missing between elements in a collection.",
     "Reached #{got} while looking for matching `#{exp}` quote."
   };
-
 
   ScopedString err_msg = z3_strcpy (yaml_error_messages[error.kind]);
   ScopedString ferr_msg = z3_interp (&err_msg, parser_filler, &error);

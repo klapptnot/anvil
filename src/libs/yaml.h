@@ -38,7 +38,7 @@
 #include <stdio.h>
 
 #define STACK_VALUE_BUFFER_SIZE 256        // max stack value size before heap
-#define HEAP_VALUE_MIN_SIZE     16         // small values: keys, booleans
+#define HEAP_VALUE_MIN_SIZE     8          // small values: keys, booleans
 #define MAX_ERROR_LINE_LENGTH   512        // terminal-friendly line length
 #define NODE_INITIAL_CAPACITY   8          // typical YAML node child count
 #define YAML_CHUNK_SIZE         (1 << 12)  // 4 KB (page-aligned I/O)
@@ -185,11 +185,11 @@ typedef struct {
 typedef struct {
   int ifd;                // Input YAML file descriptor
   uint16_t blen;          // Buffer len
-  uint16_t bred;          // Last buf read
-  char* buff;             // Current content buffer
+  uint16_t lred;          // Last buf read
+  char* chunk;            // Current content buffer
   uint16_t cpos;          // Current buffer position
-  uint16_t line;          // Current line number
   uint16_t lpos;          // Current pos in line
+  uint16_t line;          // Current line number
   uint16_t root_mark;     // Levels of indentation + rules
   YamlAliasList aliases;  // Tracked aliases
   Token cur_token;        // Most recently parsed token

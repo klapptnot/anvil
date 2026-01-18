@@ -3,7 +3,7 @@
 # documentation, huh? Just read error messages.
 package: 'anvil' # Too expensive!
 version: '0.1' # There's no mayor version, till we reach 0.4
-author : 'Klapptnot Z3' # UwU~
+author: 'Klapptnot Z3' # UwU~
 description: "A #{C} build tool-- UwU~"
 
 # override build tool defaults, AWD == Anvil Work Dir (project root)

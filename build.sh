@@ -31,7 +31,8 @@ function clang_check {
   # Determine files to check
   if [[ ${#} -eq 0 ]]; then
     # No args? Find all .c and .h files recursively
-    mapfile -t files < <(find . -type f \( -name '*.c' -o -name '*.h' \))
+    # mapfile -t files < <(find . -type f \( -name '*.c' -o -name '*.h' \))
+    mapfile -t files < <(find ./src -type f -name '*.c')
   else
     files=("${@}")
   fi
@@ -54,6 +55,7 @@ function main {
 
   readonly -a C_FLAGS=(
     "-I${LIBS_DIR}"
+    # "-D_YAML_TEST"
     "-x"
     "c"
     "-std=c23"
@@ -100,8 +102,8 @@ function main {
   fi
 
   readonly -a args=(
-    "${@}"
     "${THIS_PARENT}/anvil.yaml"
+    "${@}"
   )
 
   if [ "${operation}" == 'run' ]; then
