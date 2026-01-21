@@ -1,7 +1,7 @@
-base: &base { id: '001', type: 'user' }
+base: &base { id: "001", type: "user" }
 settings: &settings {
   theme: 'dark',
-  font: 'monospace,
+  font: 'monospace',
   size: 'medium'
 }
 user_main: {
@@ -32,13 +32,13 @@ nested: {
   }
 }
 servers: [
-  { host: 'localhost', port: '8080' },
+  { host: 'localhost', port: 8080 },
   {
     host: 'example.com',
-    port: '443',
+    port: 443,
     secure: true
   },
-  { host: 'backup.local', port: '3000' }
+  { host: 'backup.local', port: 3000 }
 ]
 notes: { desc: 'All configs use flow-style only' }
 

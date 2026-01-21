@@ -43,7 +43,7 @@ build: {
     git_hash: {
       validation: "none", # none, status, content, all
       cache_policy: "memoize", # never, memoize, always
-      command: ["git", "rev-parse\n", "HEAD"]
+      command: ["git", "rev-parse", "HEAD"]
     }
   },
 

@@ -85,8 +85,8 @@ static void parser_error (YamlParser* yp, YamlError error) {
     "Expected #{exp}, found #{got}.",
     "Unexpected character.",
     "#{} is redefined in the current context.",
-    "Alias #{} is undefined.",
-    "Alias #{} is already defined.",
+    "Alias *#{} is undefined.",
+    "Anchor &#{} is already defined.",
     "Missing value after key #{}.",
     "Comma missing between elements in a collection.",
     "Reached #{got} while looking for matching `#{exp}` quote."
@@ -96,7 +96,7 @@ static void parser_error (YamlParser* yp, YamlError error) {
   ScopedString ferr_msg = z3_interp (&err_msg, parser_filler, &error);
 
   eprintf ("YamlError::%s\n", yaml_error_to_string (error.kind));
-  eprintf ("anvil.yaml:%hu:%hu -> %s\n", yp->line, yp->lpos, ferr_msg.chr);
+  eprintf ("%s:%hu:%hu -> %s\n", yp->strline->chr, yp->line, yp->lpos, ferr_msg.chr);
 
   fflush (stderr);  // NOLINT (cert-err33-c)
   _exit (EXIT_FAILURE);

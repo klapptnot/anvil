@@ -141,7 +141,8 @@ int main (int argc, char** argv) {
   IGNORE_UNUSED (char* _this_file = popf (argc, argv));  // NOLINT (concurrency-mt-unsafe)
   char* file_name = popf (argc, argv);                   // NOLINT (concurrency-mt-unsafe)
 
-  Node* root = parse_yaml (file_name);
+  ScopedString strings = z3_str(1024); // NOLINT (readability-magic-numbers)
+  Node* root = parse_yaml (file_name, &strings);
 
   if (!root) {
     errpfmt ("Failed to parse YAML\n");
