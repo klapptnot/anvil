@@ -54,8 +54,8 @@ function main {
   shift 1
 
   readonly -a C_FLAGS=(
-    "-I${LIBS_DIR}"
     # "-D_YAML_TEST"
+    "-I${LIBS_DIR}"
     "-x"
     "c"
     "-std=c23"
@@ -102,6 +102,7 @@ function main {
   fi
 
   readonly -a args=(
+    # "${THIS_PARENT}/base.yaml"
     "${THIS_PARENT}/anvil.yaml"
     "${@}"
   )

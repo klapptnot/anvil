@@ -27,6 +27,9 @@
 #pragma once
 
 #include <stdint.h>
+
+#include "z3_string.h"
+#include "z3_vector.h"
 #ifndef __STDC_VERSION__
 #error A modern C standard (like C23) is required
 #elif __STDC_VERSION__ != 202311L
@@ -63,16 +66,6 @@ enum YamlChar {
   CHAR_ASTERISK = '*',       // References an alias
 };
 
-// Tags for token identification
-enum TagKind {
-  TAG_NULL,
-  TAG_ANCHOR,
-  TAG_ALIAS,
-  TAG_KEY,
-  TAG_BOOL,
-  TAG_MERGE
-};
-
 // Enumeration of token types for lexical analysis
 // Helps identify the context and type of parsed tokens
 typedef enum {
@@ -90,10 +83,19 @@ typedef enum {
   TOKEN_OPEN_SEQ,    // Start of sequence token
   TOKEN_CLOSE_SEQ,   // End of sequence token
   TOKEN_EOF,         // End of input token
-  TOKEN_MERGE,       //= Merge value
   TOKEN_INDENT,      //= Container node open
   TOKEN_DEDENT,      //= Container node close
 } TokenKind;
+
+// Enumeration of possible node types in parsed YAML
+// Represents different data structures and primitive types
+typedef enum {
+  NODE_MAP,       // Key-value mapping
+  NODE_SEQUENCE,  // Ordered list/array
+  NODE_STRING,    // Text string
+  NODE_NUMBER,    // Numeric value
+  NODE_BOOLEAN    // True/false value
+} NodeKind;
 
 // Enumeration of potential parsing errors
 // Helps identify specific issues during YAML parsing
@@ -116,23 +118,6 @@ typedef struct {
   const char* exp;     // Expected token/context
   const char* got;     // Actual token/context received
 } YamlError;
-
-// Enumeration of possible node types in parsed YAML
-// Represents different data structures and primitive types
-typedef enum {
-  NODE_MAP,       // Key-value mapping
-  NODE_SEQUENCE,  // Ordered list/array
-  NODE_STRING,    // Text string
-  NODE_NUMBER,    // Numeric value
-  NODE_BOOLEAN    // True/false value
-} NodeKind;
-
-// Token representation with detailed metadata
-typedef struct {
-  TokenKind kind;   // Type of token
-  uint32_t length;  // Token length
-  char* raw;        // Starting position in input
-} Token;
 
 // Recursive node structure for representing YAML data
 typedef struct Node Node;
@@ -181,31 +166,31 @@ typedef struct {
   size_t length;     // Number of aliases
 } YamlAliasList;
 
+// Token representation with detailed metadata
+typedef struct {
+  TokenKind kind;   // Type of token
+  uint32_t length;  // Token length
+  char* raw;        // Starting position in input
+} Token;
+
 // Tokenizer state tracking for parsing (weird sized for padding sense, todo)
 typedef struct {
-  int ifd;                // Input YAML file descriptor
-  uint16_t blen;          // Buffer len
-  uint16_t lred;          // Last buf read
-  char* chunk;            // Current content buffer
-  uint16_t cpos;          // Current buffer position
-  uint16_t lpos;          // Current pos in line
-  uint16_t line;          // Current line number
-  uint16_t root_mark;     // Levels of indentation + rules
-  YamlAliasList aliases;  // Tracked aliases
-  Token cur_token;        // Most recently parsed token
+  int iffd;            // Input YAML file descriptor
+  uint16_t blen;       // Buffer len
+  uint16_t lred;       // Last buf read
+  char* chunk;         // Current content buffer
+  uint16_t cpos;       // Current buffer position
+  uint16_t lpos;       // Current pos in line
+  uint16_t line;       // Current line number
+  uint16_t root_mark;  // Levels of indentation + rules
+  String* strline;     // All strings and keys
+  Vector aliases;      // Tracked aliases
+  Token cur_token;     // Most recently parsed token
 } YamlParser;
 
-// Recursively free memory allocated for a node
-void free_node (Node* node);
-
-// Add a key-value pair to a map
-void map_add (Map* map, char* key, Node* value);
-
-// Add an item to a sequence
-void sequence_add (Sequence* seq, Node* item);
-
 // Top-level function to parse an entire YAML input string
-Node* parse_yaml (const char* filepath) __attribute__ ((ownership_holds (malloc, 1)));
+Node* parse_yaml (const char* filepath, String* strs)
+  __attribute__ ((ownership_holds (malloc, 1)));
 
 // Free all resources associated with a parsed YAML node
 void free_yaml (Node* node);
