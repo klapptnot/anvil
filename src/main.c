@@ -141,7 +141,7 @@ int main (int argc, char** argv) {
   IGNORE_UNUSED (char* _this_file = popf (argc, argv));  // NOLINT (concurrency-mt-unsafe)
   char* file_name = popf (argc, argv);                   // NOLINT (concurrency-mt-unsafe)
 
-  ScopedString strings = z3_str(1024); // NOLINT (readability-magic-numbers)
+  Vector strings = z3_vec (String);
   Node* root = parse_yaml (file_name, &strings);
 
   if (!root) {
@@ -155,7 +155,6 @@ int main (int argc, char** argv) {
   free_anvil_config (config);
   free_yaml (root);
 
-  // free (yaml_input);
   return 0;
 }
 

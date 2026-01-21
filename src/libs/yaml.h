@@ -26,10 +26,6 @@
  */
 #pragma once
 
-#include <stdint.h>
-
-#include "z3_string.h"
-#include "z3_vector.h"
 #ifndef __STDC_VERSION__
 #error A modern C standard (like C23) is required
 #elif __STDC_VERSION__ != 202311L
@@ -38,11 +34,13 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <z3_vector.h>
 
-#define STACK_VALUE_BUFFER_SIZE 256        // max stack value size before heap
+#define STACK_VALUE_BUFFER_SIZE 512        // max stack value size before heap
 #define HEAP_VALUE_MIN_SIZE     8          // small values: keys, booleans
-#define MAX_ERROR_LINE_LENGTH   512        // terminal-friendly line length
+#define STR_ALLOC_SIZE_NOME     512        // terminal-friendly line length
 #define NODE_INITIAL_CAPACITY   8          // typical YAML node child count
 #define YAML_CHUNK_SIZE         (1 << 12)  // 4 KB (page-aligned I/O)
 
@@ -183,13 +181,13 @@ typedef struct {
   uint16_t lpos;       // Current pos in line
   uint16_t line;       // Current line number
   uint16_t root_mark;  // Levels of indentation + rules
-  String* strline;     // All strings and keys
+  Vector* strs;        // All buffers for strings are here
   Vector aliases;      // Tracked aliases
   Token cur_token;     // Most recently parsed token
 } YamlParser;
 
 // Top-level function to parse an entire YAML input string
-Node* parse_yaml (const char* filepath, String* strs)
+Node* parse_yaml (const char* filepath, Vector* strs)
   __attribute__ ((ownership_holds (malloc, 1)));
 
 // Free all resources associated with a parsed YAML node

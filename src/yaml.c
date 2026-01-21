@@ -139,6 +139,17 @@ static char skip_all_whitespace (YamlParser* yp) {
   return CHAR_EOF;
 }
 
+static String* get_string_line (YamlParser* yp, size_t reqsz) {
+  Vector strs = *yp->strs;
+  String* curstr = z3_get (strs, strs.len - 1);
+  if (reqsz < curstr->max - curstr->len) return curstr;
+
+  String nz3s = z3_str (STR_ALLOC_SIZE_NOME);
+  z3_push (*yp->strs, nz3s);
+
+  return z3_get (strs, strs.len - 1);
+}
+
 static Token try_string_unesc (YamlParser* yp) {
   skip_char (yp);  // skip opening quote
 
@@ -167,20 +178,22 @@ static Token try_string_unesc (YamlParser* yp) {
 
   ScopedString unesc = z3_unescape (s.chr, s.len);
 
-  size_t start_offset = yp->strline->len;
-  z3_pushl (yp->strline, unesc.chr, unesc.len);
-  z3_pushc (yp->strline, 0);
+  size_t start_offset = yp->strs->len;
+
+  String* hold = get_string_line (yp, len);
+
+  z3_pushl (hold, unesc.chr, unesc.len);
+  z3_pushc (hold, 0);
 
   skip_char (yp);  // skip closing quote
 
   return (
-    yp->cur_token =
-      create_token (TOKEN_STRING, yp->strline->chr + start_offset, (uint32_t)unesc.len)
+    yp->cur_token = create_token (TOKEN_STRING, hold->chr + start_offset, (uint32_t)unesc.len)
   );
 }
 
 static Token try_string_lit (YamlParser* yp) {
-  size_t start_offset = yp->strline->len;
+  size_t start_offset = yp->strs->len;
   char ilubsm[STACK_VALUE_BUFFER_SIZE];
   uint16_t len = 0;
 
@@ -191,7 +204,7 @@ static Token try_string_lit (YamlParser* yp) {
     while (!eof_reached (yp) && peek_char (yp) != CHAR_QUOTE_SINGLE &&
            peek_char (yp) != CHAR_NEWLINE) {
       if (len >= STACK_VALUE_BUFFER_SIZE) {
-        z3_pushl (yp->strline, ilubsm, len);
+        z3_pushl (yp->strs, ilubsm, len);
         len = 0;
       }
       ilubsm[len++] = peek_char (yp);
@@ -216,30 +229,30 @@ static Token try_string_lit (YamlParser* yp) {
     // if '', then continue after it
     if (peek_char (yp) != CHAR_QUOTE_SINGLE) break;
     if (len >= STACK_VALUE_BUFFER_SIZE) {
-      z3_pushl (yp->strline, ilubsm, len);
+      z3_pushl (yp->strs, ilubsm, len);
       len = 0;
     }
     ilubsm[len++] = peek_char (yp);
   }
-  if (len > 0) z3_pushl (yp->strline, ilubsm, len);
+  if (len > 0) z3_pushl (yp->strs, ilubsm, len);
 
-  uint32_t token_len = (uint32_t)(yp->strline->len - start_offset);
-  z3_pushc (yp->strline, 0);
+  uint32_t token_len = (uint32_t)(yp->strs->len - start_offset);
+  z3_pushc (yp->strs, 0);
 
   return (
-    yp->cur_token = create_token (TOKEN_STRING_LIT, yp->strline->chr + start_offset, token_len)
+    yp->cur_token = create_token (TOKEN_STRING_LIT, yp->strs->chr + start_offset, token_len)
   );
 }
 
 static Token try_anchor_or_alias (YamlParser* yp, char prefix) {
   char ilubsm[STACK_VALUE_BUFFER_SIZE];
   uint16_t buf_len = 0;
-  size_t start_offset = yp->strline->len;
+  size_t start_offset = yp->strs->len;
   uint32_t len = 0;
 
   while (!eof_reached (yp) && is_valid_anchor (peek_char (yp))) {
     if (buf_len >= STACK_VALUE_BUFFER_SIZE) {
-      z3_pushl (yp->strline, ilubsm, buf_len);
+      z3_pushl (yp->strs, ilubsm, buf_len);
       buf_len = 0;
     }
     ilubsm[buf_len++] = peek_char (yp);
@@ -247,11 +260,11 @@ static Token try_anchor_or_alias (YamlParser* yp, char prefix) {
     len++;
   }
 
-  if (buf_len > 0) z3_pushl (yp->strline, ilubsm, buf_len);
-  z3_pushc (yp->strline, 0);
+  if (buf_len > 0) z3_pushl (yp->strs, ilubsm, buf_len);
+  z3_pushc (yp->strs, 0);
 
   TokenKind kind = (prefix == '&') ? TOKEN_ANCHOR : TOKEN_ALIAS;
-  return (yp->cur_token = create_token (kind, yp->strline->chr + start_offset, len));
+  return (yp->cur_token = create_token (kind, yp->strs->chr + start_offset, len));
 }
 
 static bool try_number (YamlParser* yp) {
@@ -260,7 +273,7 @@ static bool try_number (YamlParser* yp) {
 
   while (!eof_reached (yp) && is_number_parseable (peek_char (yp))) {
     if (len >= STACK_VALUE_BUFFER_SIZE) {
-      z3_pushl (yp->strline, ilubsm, len);
+      z3_pushl (yp->strs, ilubsm, len);
       len = 0;
     }
     ilubsm[len++] = peek_char (yp);
@@ -270,8 +283,8 @@ static bool try_number (YamlParser* yp) {
   char c = peek_char (yp);
   if ((int)eof_reached (yp) || is_valid_delim (c)) {
     // definitively a number
-    if (len > 0) z3_pushl (yp->strline, ilubsm, len);
-    z3_pushc (yp->strline, 0);
+    if (len > 0) z3_pushl (yp->strs, ilubsm, len);
+    z3_pushc (yp->strs, 0);
     return true;
   }
 
@@ -283,7 +296,7 @@ static int try_boolean (YamlParser* yp) {
 
   for (size_t i = 0; pattern[i] != '\0'; i++) {
     if ((int)eof_reached (yp) || peek_char (yp) != pattern[i]) {
-      z3_pushl (yp->strline, pattern, i);  // trx -> i == 2 -> push tr and leaves x
+      z3_pushl (yp->strs, pattern, i);  // trx -> i == 2 -> push tr and leaves x
       return -1;
     }
     skip_char (yp);
@@ -308,7 +321,7 @@ static Token try_key (YamlParser* yp, size_t start_offset) {
 
   // First character already peeked by caller, collect it
   if (len >= STACK_VALUE_BUFFER_SIZE) {
-    z3_pushl (yp->strline, ilubsm, len);
+    z3_pushl (yp->strs, ilubsm, len);
     len = 0;
   }
   ilubsm[len++] = peek_char (yp);
@@ -320,7 +333,7 @@ static Token try_key (YamlParser* yp, size_t start_offset) {
       if ((int)eof_reached (yp) || peek_char (yp) == CHAR_SPACE) break;
 
       if (len >= STACK_VALUE_BUFFER_SIZE) {
-        z3_pushl (yp->strline, ilubsm, len);
+        z3_pushl (yp->strs, ilubsm, len);
         len = 0;
       }
       ilubsm[len++] = CHAR_COLON;
@@ -328,19 +341,19 @@ static Token try_key (YamlParser* yp, size_t start_offset) {
     }
 
     if (len >= STACK_VALUE_BUFFER_SIZE) {
-      z3_pushl (yp->strline, ilubsm, len);
+      z3_pushl (yp->strs, ilubsm, len);
       len = 0;
     }
     ilubsm[len++] = peek_char (yp);
     skip_char (yp);
   }
 
-  if (len > 0) z3_pushl (yp->strline, ilubsm, len);
+  if (len > 0) z3_pushl (yp->strs, ilubsm, len);
 
-  uint32_t token_len = (uint32_t)(yp->strline->len - start_offset);
-  z3_pushc (yp->strline, 0);
+  uint32_t token_len = (uint32_t)(yp->strs->len - start_offset);
+  z3_pushc (yp->strs, 0);
 
-  return (yp->cur_token = create_token (TOKEN_KEY, yp->strline->chr + start_offset, token_len));
+  return (yp->cur_token = create_token (TOKEN_KEY, yp->strs->chr + start_offset, token_len));
 }
 
 static Token next_token (YamlParser* yp) {
@@ -410,12 +423,12 @@ go_back_to_start:
         return try_anchor_or_alias (yp, prefix_char);
       }
 
-      size_t start_offset = yp->strline->len;
+      size_t start_offset = yp->strs->len;
       if (is_number_parseable (c)) {
         if (try_number (yp)) {
           return (Token) {.kind = TOKEN_NUMBER,
-                          .raw = yp->strline->chr + start_offset,
-                          .length = (uint32_t)(yp->strline->len - start_offset - 1)};
+                          .raw = yp->strs->chr + start_offset,
+                          .length = (uint32_t)(yp->strs->len - start_offset - 1)};
         }
       } else if (c == 't' || c == 'f') {
         int is_bool = try_boolean (yp);
@@ -793,10 +806,13 @@ void free_yaml (Node* node) {
   node = nullptr;
 }
 
-Node* parse_yaml (const char* filepath, String* strs) {
+Node* parse_yaml (const char* filepath, Vector* strs) {
   int file_fd = fd_open_file (filepath);
-  z3_pushl (strs, filepath, strlen (filepath));
-  z3_pushc (strs, 0);
+
+  String fst = z3_str (STR_ALLOC_SIZE_NOME);
+  z3_pushl (&fst, filepath, strlen (filepath));
+  z3_pushc (&fst, 0);
+  z3_push (strs, fst);
 
   // NOLINTNEXTLINE (concurrency-mt-unsafe)
   if (file_fd < 0) die ("could not open file %s: %s\n", filepath, strerror (errno));
@@ -806,7 +822,7 @@ Node* parse_yaml (const char* filepath, String* strs) {
   YamlParser yp = {0};
   yp.chunk = yaml_chunk;
   yp.iffd = file_fd;
-  yp.strline = strs;
+  yp.strs = strs;
   yp.aliases = z3_vec (YamlAlias);
   yp.aliases.max = 4;
   yp.aliases.val = calloc (4, sizeof (YamlAlias));
