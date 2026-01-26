@@ -62,9 +62,6 @@ void z3_pushc (String* str, char c);
 //~ Append a C-style string to a String
 void z3_pushl (String* str, const char* s, size_t l);
 
-//~ Ensure String is null terminated
-void z3_ensure0 (String* str);
-
 //~ Ensure String has enough allocated memory
 void z3_reserve (String* str, size_t additional);
 
@@ -77,12 +74,14 @@ String z3_escape (const char* input, size_t len);
 //~ Unescape a string, converting escape sequences to their respective characters
 String z3_unescape (const char* input, size_t len);
 
-//~ Interpolate a template string by replacing placeholders with values
+//~ Interpolate a template string with values from a filler function
 //
 //~ This function takes ctx and a template string containing placeholders in the format
-//  `#{<possible_id>}`, ~ and generates a new string by replacing those placeholders with
-//  corresponding values obtained ~ from the provided `filler` function. The `filler` function
-//  takes the placeholder's ID (as a string) ~ and returns the replacement string.
+//  `#{<name>}`, and generates a new string by replacing those placeholders with
+//  corresponding values obtained from the provided `filler` function. The `filler` function
+//  gets the accumulated String, the placeholder (char*) and the context; true if something
+//  has been added or just want to remove the placeholder, returns false to add the
+//  whole placeholder back to the string.
 //
 //~ Note: The original template string is not modified. A new `String` is created with the
 //  interpolated values.
@@ -100,22 +99,13 @@ String z3_interp (
 void z3_reserve (String* str, size_t additional) {
   if (!str || !str->chr) return;
 
-  if (str->len + additional + 1 > str->max) {
-    while (str->max < str->len + additional + 1) {
-      str->max *= 2;
-    }
+  if (str->len + additional >= str->max) {
+    str->max = next_power_of2 (str->len + additional + 1);
 
     // NOLINTNEXTLINE (bugprone-suspicious-realloc-usage)
     str->chr = realloc (str->chr, str->max);
     if (str->chr == nullptr) die ("String realloc: requested %zu bytes\n", str->max);
   }
-}
-
-void z3_ensure0 (String* str) {
-  if (!str || !str->chr) return;
-
-  if (str->chr[str->len] == '\0') return;
-  str->chr[str->len] = '\0';
 }
 
 void z3_pushc (String* str, char c) {
@@ -124,7 +114,7 @@ void z3_pushc (String* str, char c) {
   z3_reserve (str, 1);
   str->chr[str->len] = c;
   str->len++;
-  str->chr[str->len] = '\0';
+  // str->chr[str->len] = '\0';
 }
 
 void z3_pushl (String* str, const char* s, size_t l) {
@@ -140,10 +130,8 @@ String z3_str (size_t min) {
   String str = {0};
   str.max = next_power_of2 (min);  // Initial capacity
   str.len = 0;
-  str.chr = malloc (str.max);
-  if (str.chr) {
-    str.chr[0] = '\0';
-  }
+  str.chr = calloc (str.max, sizeof (char));
+  if (str.chr == nullptr) die ("String: requested %zu bytes", sizeof (char) * str.max);
   return str;
 }
 
@@ -152,9 +140,9 @@ String z3_strcpy (const char* s) {
   size_t len = strlen (s) + 1;
   str.max = ((len & (len - 1)) == 0) ? len : next_power_of2 (len);
   str.len = len - 1;
-  str.chr = malloc (str.max);
-  if (str.chr == nullptr) die ("failed to allocate memory for string\n");
-  strcpy (str.chr, s);
+  str.chr = calloc (str.max, sizeof (char));
+  if (str.chr == nullptr) die ("String: requested %zu bytes", sizeof (char) * str.max);
+  memcpy (str.chr, s, len - 1);
   str.chr[str.len] = '\0';
   return str;
 }
@@ -242,7 +230,7 @@ String z3_interp (
 
 String z3_escape (const char* input, size_t len) {
   char hex_digits[] = "0123456789abcdef";
-  String s = z3_str (32);  // NOLINT (readability-magic-numbers)
+  String s = z3_str (len);
   size_t l = 0;
 
   // loop until `\0`, or until length
@@ -297,12 +285,11 @@ String z3_escape (const char* input, size_t len) {
     input++;
     l++;
   }
-  z3_ensure0 (&s);
   return s;
 }
 
 String z3_unescape (const char* input, size_t len) {
-  String s = z3_str (32);  // NOLINT (readability-magic-numbers)
+  String s = z3_str (len);
   size_t l = 0;
 
   // loop until `\0`, or until length
@@ -386,7 +373,6 @@ String z3_unescape (const char* input, size_t len) {
     input++;
     l++;
   }
-  z3_ensure0 (&s);
   return s;
 }
 

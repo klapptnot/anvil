@@ -1,18 +1,14 @@
 #!/usr/bin/bash
 
+include barg.sh
+
 read -r THIS_SCRIPT < <(realpath -- "${0}")
 read -r THIS_NAME < <(basename -- "${THIS_SCRIPT}")
 read -r THIS_PARENT < <(dirname -- "${THIS_SCRIPT}")
 
 readonly LIBS_DIR="${THIS_PARENT}/src/libs"
 readonly TARGET_DIR="${THIS_PARENT}/target"
-readonly OUT_BIN="${TARGET_DIR}/main"
-readonly -a RECIPE=(
-  "${THIS_PARENT}/src/main.c"
-  "${THIS_PARENT}/src/build.c"
-  "${THIS_PARENT}/src/config.c"
-  "${THIS_PARENT}/src/yaml.c"
-)
+readonly ANVIL_YAML="${THIS_PARENT}/anvil.yaml"
 
 function clang_check {
   local clangd_cfg="${XDG_CONFIG_HOME:-${HOME}/.config}/clangd/config.yaml"
@@ -47,14 +43,59 @@ function clang_check {
   clang "-I${LIBS_DIR}" "${flags[@]}" "${files[@]}"
 }
 
+function slow_try_get_cfiles {
+  declare -n rec_arr="${1}"
+
+  local main="${rec_arr[0]}"
+
+  local c='' h=''
+  read -ra all < <(clang "-I${LIBS_DIR}" -std=c23 -MM "${main}" | sed 's/\\$//' | tr -d '\n' | cut -d' ' -f3-)
+  for h in "${all[@]}"; do
+    [[ "${h}" != "${2}"* ]] && continue
+
+    c=${h%.h}.c
+    if test -f "${c}"; then
+      [ "${c}" != "${main}" ] && rec_arr+=("${c}")
+      continue
+    fi
+
+    h="${h##*/}"
+    c="${2}/${h%.h}.c"
+    test -f "${c}" && {
+      [ "${c}" != "${main}" ] && rec_arr+=("${c}")
+    }
+  done
+}
+
+function slow_rebuild {
+  local recipe=("${1}")
+  shift 1
+  slow_try_get_cfiles recipe "${libs_parent}"
+  recipe+=("${@}")
+
+  if [ -f "${OUT_BIN}" ] && ! ${BUILD_REBUILD}; then
+    for f in "${recipe[@]}"; do
+      if [ "${f}" -nt "${OUT_BIN}" ]; then
+        BUILD_REBUILD=true
+        break
+      fi
+    done
+  else
+    BUILD_REBUILD=true
+  fi
+
+  if "${BUILD_REBUILD}"; then
+    printf ' Compiling...\r'
+    clang "${C_FLAGS[@]}" \
+      -o "${OUT_BIN}" "${recipe[@]}" || exit
+    printf '\x1b[0K Done\r'
+  fi
+}
+
 function main {
   [ ! -d "${TARGET_DIR}" ] && mkdir -p "${TARGET_DIR}"
 
-  local operation="${1:?Argument required, one of <exp|run|val|check>}"
-  shift 1
-
-  readonly -a C_FLAGS=(
-    # "-D_YAML_TEST"
+  declare -a C_FLAGS=(
     "-I${LIBS_DIR}"
     "-x"
     "c"
@@ -66,55 +107,58 @@ function main {
     "-pedantic"
     "-ggdb"
     "-O1"
-    # "-fstack-protector-strong"
-    # "-D_FORTIFY_SOURCE=2"
-    # "-fsanitize=address,undefined,leak"
-    # "-fno-omit-frame-pointer"
   )
 
-  if [ "${operation}" == 'check' ]; then
-    clang_check "${@}"
-    exit
-  fi
+  read -r targets < <(yq '.targets[] | .name' "${ANVIL_YAML}" | tr '\n' ' ')
 
-  if [ "${operation}" == 'exp' ]; then
-    exec clang -E "-I${LIBS_DIR}" -x c -std=c23 \
-      "${RECIPE[@]}"
-  fi
+  barg::parse "${@}" << EOF
+  #[always]
+  meta {
+    argv_zero: 'build'
+    subcommand_required: true
+    help_enabled: true
+    spare_args_var: 'BUILD_ARGS'
+  }
+  commands {
+    build: "(re)Build target, just that"
+    check: "Run clang check on all C files"
+    expand: "Only run the preprocessor, print code"
+    *run: "Run target binary"
+    *val: "Run target binary with Valgrind"
+  }
 
-  local REBUILD=false
-  if [ -f "${OUT_BIN}" ]; then
-    for f in "${RECIPE[@]}"; do
-      if [ "${f}" -nt "${OUT_BIN}" ]; then
-        REBUILD=true
-        break
-      fi
-    done
-  else
-    REBUILD=true
-  fi
+  r/rebuild :flag => BUILD_REBUILD 'Rebuild even if no new changes'
+  t/target [${targets}] ${targets%\ *} => BUILD_TARGET 'Select build target'
+EOF
 
-  if "${REBUILD}"; then
-    printf ' Compiling...\r'
-    clang "${C_FLAGS[@]}" \
-      -o "${OUT_BIN}" "${RECIPE[@]}" || exit
-    printf '\x1b[0K Done\r'
-  fi
+  local -a args=("${BUILD_ARGS[@]}")
+  mapfile -t c_flags < <(yq -r '.profiles.release[]' anvil.yaml)
+  read -r libs_parent < <(yq -r '.workspace.libs' anvil.yaml)
+  local libs_parent="${libs_parent/#\#\{AWD\}/${THIS_PARENT}}"
+  local target=$(yq -r ".targets[] | select (.name == \"${BUILD_TARGET}\")" anvil.yaml)
 
-  readonly -a args=(
-    # "${THIS_PARENT}/base.yaml"
-    "${THIS_PARENT}/anvil.yaml"
-    "${@}"
-  )
+  read -r target_main < <(jq -r .main <<< "${target}")
+  mapfile -t target_macros < <(jq -r '.macros | to_entries[] | "-D\(.key)=\(.value | @sh)"' <<< "${target}")
+  OUT_BIN="${TARGET_DIR}/${BUILD_TARGET}"
 
-  if [ "${operation}" == 'run' ]; then
-    exec "${OUT_BIN}" "${args[@]}"
-  elif [ "${operation}" == "val" ]; then
-    exec valgrind -s \
-      --leak-check=full --show-leak-kinds=all \
-      --track-origins=yes --verbose \
-      "${OUT_BIN}" "${args[@]}"
-  fi
+  local target_main="${target_main/#\#\{AWD\}/${THIS_PARENT}}"
+
+  case "${BARG_SUBCOMMAND}" in
+    check) clang_check "${@}" ;;
+    expand) exec clang -E "-I${LIBS_DIR}" -x c -std=c23 "${RECIPE[@]}" ;;
+  esac
+
+  slow_rebuild "${target_main}" "${target_macros[@]}"
+
+  case "${BARG_SUBCOMMAND}" in
+    run) exec "${OUT_BIN}" "${args[@]}" ;;
+    val)
+      exec valgrind -s \
+        --leak-check=full --show-leak-kinds=all \
+        --track-origins=yes --verbose \
+        "${OUT_BIN}" "${args[@]}"
+      ;;
+  esac
 }
 
 main "${@}"

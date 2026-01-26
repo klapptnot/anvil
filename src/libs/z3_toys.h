@@ -30,23 +30,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Compiler-specific warning suppression
 #if defined(__GNUC__) || defined(__clang__)
 #define IGNORE_UNUSED(declaration)                                                \
   _Pragma ("GCC diagnostic push") _Pragma ("GCC diagnostic ignored \"-Wunused\"") \
     _Pragma ("GCC diagnostic ignored \"-Wunused-result\"")                        \
       declaration _Pragma ("GCC diagnostic pop")
-#else
-#define IGNORE_UNUSED(declaration) declaration
-#endif
 
 // I enable **all** warnings, I want to pick which one to silence
 // but still get them
-#if defined(__GNUC__) || defined(__clang__)
 #define IGNORE_WARNING(declaration)                                            \
   _Pragma ("GCC diagnostic push") _Pragma ("GCC diagnostic ignored \"-Wall\"") \
     declaration _Pragma ("GCC diagnostic pop")
 #else
+#define IGNORE_UNUSED(declaration)  declaration
 #define IGNORE_WARNING(declaration) declaration
 #endif
 

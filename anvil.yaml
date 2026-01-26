@@ -1,66 +1,78 @@
 # this is a subset of YAML, refer to docs.
 # there's no support for scalars, or blocks.
 # documentation, huh? Just read error messages.
-package: 'anvil' # Too expensive!
-version: '0.1' # There's no mayor version, till we reach 0.4
-author: 'Klapptnot Z3' # UwU~
+package: "anvil" # Too expensive!
+version: "0.1" # There"s no mayor version, till we reach 0.4
+author: "Klapptnot Z3" # UwU~
 description: "A #{C} build tool-- UwU~"
 
 # override build tool defaults, AWD == Anvil Work Dir (project root)
 workspace: {
-  libs: "#{AWD}/libs", # default "#{AWD}/src/libs"
-  target: "#{AWD}/build" # default "#{AWD}/target"
+  libs: "#{AWD}/src", # default "#{AWD}/src/libs"
+  build: '#{AWD}/build' # default "#{AWD}/build"
 }
 
 # build targets (index 0 is default for `anvil build` or `anvil run`)
 # Otherwise: `anvil build --target <name>`
 targets: [
   {
-    name: "anvil",
-    type: "exec",
-    main: "#{AWD}/src/main.c",
+    name: 'anvil',
+    type: 'exec',
+    main: '#{AWD}/src/main.c',
     macros: {},
     for: [
-      "x86_64-linux-gnu",
-      "aarch64-linux-gnu"
+      'x86_64-linux-gnu',
+      'aarch64-linux-gnu'
+    ]
+  },
+  {
+    name: 'yaml',
+    type: 'exec',
+    main: '#{AWD}/src/yaml.c',
+    macros: {
+      _YAML_TEST: '1'
+    },
+    for: [
+      'x86_64-linux-gnu',
+      'aarch64-linux-gnu'
     ]
   }
 ]
 
 build: {
-  compiler: "clang",
-  cstd: "c23",
+  compiler: 'clang',
+  cstd: 'c23',
   jobs: 1, # 0 -> auto
 
   # arguments are defined below
   # hooks are bash scripts in `hooks` folder
   macros: {
-    GIT_HASH: "#{arg:git_hash}",
-    GIT_INFO: "#{hook:git_info}"
+    GIT_HASH: '#{arg:git_hash}',
+    GIT_INFO: '#{hook:git_info}'
   },
 
   arguments: {
     git_hash: {
-      validation: "none", # none, status, content, all
-      cache_policy: "memoize", # never, memoize, always
-      command: ["git", "rev-parse", "HEAD"]
+      validation: 'none', # none, status, content, all
+      cache_policy: 'memoize', # never, memoize, always
+      command: ['git', 'rev-parse', 'HEAD']
     }
   },
 
   deps: [
     {
-      name: "gtk4",
-      # pkg-config == "use system dependencies"
-      type: "pkg-config"
+      name: 'gtk4',
+      # pkg-config == 'use system dependencies'
+      type: 'pkg-config'
     },
     {
-      name: "stb_image",
-      type: "github",
-      repo: "nothings/stb",
+      name: 'stb_image',
+      type: 'github',
+      repo: 'nothings/stb',
       # if it ends with `/`, repo will be cloned (if that path exists in repo)
       # and that folder will be added as -I{path_to_folder}
       # Otherwise, the single file will be downloaded to a folder
-      path: "stb_image.h"
+      path: 'stb_image.h'
     }
   ]
 }
@@ -72,21 +84,21 @@ build: {
 # debug: *release_prof,
 profiles: {
   release: [
-    "-O3",
-    "-Werror",
-    "-DNDEBUG",
-    "-Wall",
-    "-Wextra",
-    "-pedantic"
+    '-O3',
+    '-Werror',
+    '-DNDEBUG',
+    '-Wall',
+    '-Wextra',
+    '-pedantic'
   ],
 
   debug: [
-    "-ggdb",
-    "-Werror",
-    "-O1",
-    "-fstack-protector-strong",
-    "-D_FORTIFY_SOURCE=2",
-    "-fsanitize=address,undefined",
-    "-fno-omit-frame-pointer"
+    '-ggdb',
+    '-Werror',
+    '-O1',
+    '-fstack-protector-strong',
+    '-D_FORTIFY_SOURCE=2',
+    '-fsanitize=address,undefined',
+    '-fno-omit-frame-pointer'
   ]
 }

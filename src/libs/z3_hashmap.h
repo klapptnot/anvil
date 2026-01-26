@@ -86,6 +86,9 @@ void z3_hashmap_iter_init (HashMapIterator* it, HashMap* map);
 //! Returns true if an entry is found; false if iteration is complete
 bool z3_hashmap_iter_next (HashMapIterator* it);
 
+//~ Define a HashMap with automatic cleanup
+#define ScopedHashMap __attribute__ ((cleanup (z3_hashmap_drop))) HashMap
+
 #ifdef Z3_HASHMAP_IMPL
 
 #define Z3_HASHMAP_INITIAL_CAPACITY 32
