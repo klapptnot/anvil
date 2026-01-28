@@ -38,11 +38,16 @@
 #include <stdio.h>
 #include <z3_vector.h>
 
-#define STACK_VALUE_BUFFER_SIZE 512        // max stack value size before heap
-#define HEAP_VALUE_MIN_SIZE     8          // small values: keys, booleans
-#define STR_ALLOC_SIZE_NOME     512        // terminal-friendly line length
-#define NODE_INITIAL_CAPACITY   8          // typical YAML node child count
-#define YAML_CHUNK_SIZE         (1 << 12)  // 4 KB (page-aligned I/O)
+#ifdef _YAML_TEST
+#define Z3_TOYS_IMPL
+#define Z3_STRING_IMPL
+#endif
+
+#define MAX_NUMBER_LENGTH     64         // string representation, without _, or leading zeros
+#define HEAP_VALUE_MIN_SIZE   8          // small values: keys, booleans
+#define STR_ALLOC_SIZE_BASE   512        // base string length, pools
+#define NODE_INITIAL_CAPACITY 8          // typical YAML node child count
+#define YAML_CHUNK_SIZE       (1 << 12)  // 4 KB (page-aligned I/O)
 
 // Single characters with specific meanings in YAML syntax
 enum YamlChar {
@@ -88,11 +93,11 @@ typedef enum {
 // Enumeration of possible node types in parsed YAML
 // Represents different data structures and primitive types
 typedef enum {
-  NODE_MAP,       // Key-value mapping
-  NODE_SEQUENCE,  // Ordered list/array
-  NODE_STRING,    // Text string
-  NODE_NUMBER,    // Numeric value
-  NODE_BOOLEAN    // True/false value
+  NODE_MAP,     // Key-value mapping
+  NODE_LIST,    // Ordered list/array
+  NODE_STRING,  // Text string
+  NODE_NUMBER,  // Numeric value
+  NODE_BOOLEAN  // True/false value
 } NodeKind;
 
 // Enumeration of potential parsing errors
@@ -107,6 +112,8 @@ typedef enum {
   MISSING_VALUE,     // No value provided for a key
   MISSING_COMMA,     // Missing separator in collections
   UNCLOSED_QUOTE,    // Missing matching quote for strings
+  NUMBER_TOO_LONG,   // Number exceeds integer representation lenght
+  KEY_TOO_LONG,      // Key exceeds maximum allowed value
 } YamlErrorKind;
 
 // Structured error information for detailed error reporting
@@ -120,25 +127,25 @@ typedef struct {
 // Recursive node structure for representing YAML data
 typedef struct Node Node;
 
-// Sequence (list/array) representation
+// List/array representation
 typedef struct {
   size_t size;      // Current number of elements
   size_t capacity;  // Allocated capacity
   Node** items;     // Array of node pointers
-} Sequence;
+} YamlList;
 
 // Map entry with key-value pair
 typedef struct {
   char* key;  // Key string
   Node* val;  // Associated value node
-} MapEntry;
+} YamlMapEntry;
 
 // Map (object) representation
 typedef struct {
-  size_t size;        // Current number of entries
-  size_t capacity;    // Allocated capacity
-  MapEntry* entries;  // Array of map entries
-} Map;
+  size_t size;            // Current number of entries
+  size_t capacity;        // Allocated capacity
+  YamlMapEntry* entries;  // Array of map entries
+} YamlMap;
 
 struct Node {
   NodeKind kind;        // Type of node
@@ -147,8 +154,8 @@ struct Node {
     char* string;       // String node value
     double number;      // Numeric node value
     bool boolean;       // Boolean node value
-    Sequence sequence;  // Sequence node value
-    Map map;            // Map node value
+    YamlList list;      // Sequence node value
+    YamlMap map;        // Map node value
   };
 };
 
@@ -171,23 +178,28 @@ typedef struct {
   char* raw;        // Starting position in input
 } Token;
 
+typedef struct {
+  Vector strs;
+  Vector bigs;
+} YamlStore;
+
 // Tokenizer state tracking for parsing (weird sized for padding sense, todo)
 typedef struct {
   int iffd;            // Input YAML file descriptor
   uint16_t blen;       // Buffer len
-  uint16_t lred;       // Last buf read
+  uint16_t reof;       // EOF reached boolean-ish
   char* chunk;         // Current content buffer
   uint16_t cpos;       // Current buffer position
   uint16_t lpos;       // Current pos in line
   uint16_t line;       // Current line number
   uint16_t root_mark;  // Levels of indentation + rules
-  Vector* strs;        // All buffers for strings are here
+  YamlStore* store;    // All buffers for strings are here
   Vector aliases;      // Tracked aliases
   Token cur_token;     // Most recently parsed token
 } YamlParser;
 
 // Top-level function to parse an entire YAML input string
-Node* parse_yaml (const char* filepath, Vector* strs)
+Node* parse_yaml (const char* filepath, YamlStore* store)
   __attribute__ ((ownership_holds (malloc, 1)));
 
 // Free all resources associated with a parsed YAML node
@@ -195,3 +207,63 @@ void free_yaml (Node* node);
 
 // Retrieve an arbitrary node from a map by its key
 Node* map_get_node (Node* node, const char* key);
+
+#ifdef _YAML_TEST
+#define PRINT_TOKEN(tok)                                                       \
+  do {                                                                         \
+    printf (                                                                   \
+      "\033[1;35mTOKEN\033[0m [\033[1;33m%3u\033[0m] \033[1;36m%-20s\033[0m ", \
+      (tok).length,                                                            \
+      token_kind_strings[(tok).kind]                                           \
+    );                                                                         \
+                                                                               \
+    if ((tok).raw == nullptr) {                                                \
+      printf ("\033[91m<null>\033[0m\n");                                      \
+      break;                                                                   \
+    }                                                                          \
+                                                                               \
+    /* Print hex */                                                            \
+    printf ("\033[90mhex[\033[0m");                                            \
+    for (uint32_t _i = 0; _i < (tok).length; _i++) {                           \
+      printf ("\033[32m%02X\033[0m", (unsigned char)(tok).raw[_i]);            \
+      if (_i < (tok).length - 1) printf (" ");                                 \
+    }                                                                          \
+    printf ("\033[90m]\033[0m ");                                              \
+                                                                               \
+    /* Print string */                                                         \
+    printf ("\033[90mstr[\033[0m\033[1;37m");                                  \
+    for (uint32_t _i = 0; _i < (tok).length; _i++) {                           \
+      char c = (tok).raw[_i];                                                  \
+      if (c >= 32 && c <= 126)                                                 \
+        printf ("%c", c);                                                      \
+      else                                                                     \
+        printf ("\033[91m·\033[1;37m");                                        \
+    }                                                                          \
+    printf ("\033[0m\033[90m]\033[0m\n");                                      \
+  } while (0)
+
+#define BYTES_PER_DUMP_LINE 16
+static void hex_dump (const unsigned char* buf, size_t len) {
+  for (size_t off = 0; off < len; off += BYTES_PER_DUMP_LINE) { /* hex column */
+    for (size_t i = 0; i < BYTES_PER_DUMP_LINE; i++) {
+      if (off + i < len)
+        printf ("%02x ", buf[off + i]);
+      else
+        printf ("   ");
+    }
+    printf ("-> "); /* char column */
+    for (size_t i = 0; i < BYTES_PER_DUMP_LINE; i++) {
+      if (off + i < len) {
+        unsigned char c = buf[off + i];
+        if (isprint (c))
+          putchar (c);
+        else
+          printf ("\x1b[31m.\x1b[0m");
+      } else {
+        putchar (' ');
+      }
+    }
+    putchar ('\n');
+  }
+}
+#endif  // _YAML_TEST

@@ -17,7 +17,6 @@
 #include <z3_toys.h>
 #include <z3_vector.h>
 
-#include "build.h"
 #include "config.h"
 #include "yaml.h"
 
@@ -35,12 +34,14 @@ String float_to_str (float num);
 //   return true;
 // }
 
-#define _dynarray_print_String(val)                            \
+#define z3__display_String(val)                                \
   {                                                            \
     String s = z3_escape ((val)->chr, (val)->len);             \
     printf ("{l: %2zu, m: %2zu} \"%s\"", s.len, s.max, s.chr); \
     z3_drops (&s);                                             \
   }
+
+z3_vec_drop_fn (String, z3_drops);
 
 static void print_anvil_config (const AnvilConfig* config) {
   if (!config) {
@@ -57,7 +58,7 @@ static void print_anvil_config (const AnvilConfig* config) {
   // Workspace
   printf ("\n-- Workspace --\n");
   printf ("Libs Path: %s\n", config->workspace->libs);
-  printf ("Target Path: %s\n", config->workspace->target);
+  printf ("Build Path: %s\n", config->workspace->build);
 
   // Targets
   printf ("\n-- Targets -- %zu\n", config->targets->count);
@@ -141,8 +142,8 @@ int main (int argc, char** argv) {
   IGNORE_UNUSED (char* _this_file = popf (argc, argv));  // NOLINT (concurrency-mt-unsafe)
   char* file_name = popf (argc, argv);                   // NOLINT (concurrency-mt-unsafe)
 
-  Vector strings = z3_vec (String);
-  Node* root = parse_yaml (file_name, &strings);
+  YamlStore store;
+  Node* root = parse_yaml (file_name, &store);
 
   if (!root) {
     errpfmt ("Failed to parse YAML\n");
@@ -154,6 +155,8 @@ int main (int argc, char** argv) {
   print_anvil_config (config);
   free_anvil_config (config);
   free_yaml (root);
+  z3_vec_drop_String (&store.strs);
+  z3_vec_drop_String (&store.bigs);
 
   return 0;
 }

@@ -9,6 +9,7 @@
 #include <yaml.h>
 #include <z3_string.h>
 #include <z3_toys.h>
+#include <z3_vector.h>
 
 #define LINE_BUFFER_CLAMP(x) ((x) > MAX_ERROR_LINE_LENGTH ? MAX_ERROR_LINE_LENGTH : (x))
 #define COPY_LINE(buf, off, len)         \
@@ -38,6 +39,10 @@ static const char* yaml_error_to_string (YamlErrorKind error) {
       return "MISSING_COMMA";
     case UNCLOSED_QUOTE:
       return "UNCLOSED_QUOTE";
+    case NUMBER_TOO_LONG:
+      return "NUMBER_TOO_LONG";
+    case KEY_TOO_LONG:
+      return "KEY_TOO_LONG";
     default:
       return "UNKNOWN_ERROR";
   }
@@ -89,14 +94,18 @@ static void parser_error (YamlParser* yp, YamlError error) {
     "Anchor &#{} is already defined.",
     "Missing value after key #{}.",
     "Comma missing between elements in a collection.",
-    "Reached #{got} while looking for matching `#{exp}` quote."
+    "Reached #{got} while looking for matching `#{exp}` quote.",
+    "Number is over 64 chars, not counting underscores or leading zeros",
+    "Key exceeds length limit, may not surpass 255 chars"
   };
+
+  String* filename = z3_get(yp->store->strs, 0);
 
   ScopedString err_msg = z3_strcpy (yaml_error_messages[error.kind]);
   ScopedString ferr_msg = z3_interp (&err_msg, parser_filler, &error);
 
   eprintf ("YamlError::%s\n", yaml_error_to_string (error.kind));
-  eprintf ("%s:%hu:%hu -> %s\n", yp->strline->chr, yp->line, yp->lpos, ferr_msg.chr);
+  eprintf ("%s:%hu:%hu -> %s\n", filename->chr, yp->line, yp->lpos, ferr_msg.chr);
 
   fflush (stderr);  // NOLINT (cert-err33-c)
   _exit (EXIT_FAILURE);

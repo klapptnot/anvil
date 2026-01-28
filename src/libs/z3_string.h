@@ -100,11 +100,16 @@ void z3_reserve (String* str, size_t additional) {
   if (!str || !str->chr) return;
 
   if (str->len + additional >= str->max) {
-    str->max = next_power_of2 (str->len + additional + 1);
+    size_t new_max = next_power_of2 (str->len + additional + 1);
 
-    // NOLINTNEXTLINE (bugprone-suspicious-realloc-usage)
-    str->chr = realloc (str->chr, str->max);
-    if (str->chr == nullptr) die ("String realloc: requested %zu bytes\n", str->max);
+    char* new_chr = calloc (new_max, sizeof (char));
+    if (new_chr == nullptr) die ("String reserve: requested %zu bytes\n", new_max);
+
+    memcpy (new_chr, str->chr, str->len);
+    free (str->chr);
+
+    str->chr = new_chr;
+    str->max = new_max;
   }
 }
 

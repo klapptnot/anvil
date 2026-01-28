@@ -22,11 +22,11 @@ void dset_argument_config (ArgumentConfig* acon, Node* node) {
   acon->cache_policy = (cpol && cpol->kind == NODE_STRING) ? cpol->string : nullptr;
 
   Node* cmds = map_get_node (node, "command");
-  if (cmds && cmds->kind == NODE_SEQUENCE) {
-    acon->command_len = cmds->sequence.size;
+  if (cmds && cmds->kind == NODE_LIST) {
+    acon->command_len = cmds->list.size;
     acon->command = (const char**)malloc (sizeof (char*) * acon->command_len);
     for (size_t i = 0; i < acon->command_len; i++) {
-      Node* item = cmds->sequence.items[i];
+      Node* item = cmds->list.items[i];
       acon->command[i] = (item && item->kind == NODE_STRING) ? item->string : nullptr;
     }
   } else {
@@ -61,11 +61,11 @@ void dset_workspace_config (WorkspaceConfig* wconf, Node* node) {
     wconf->libs = DEFAULT_LIBS_PATH;
   }
 
-  Node* wtarget = map_get_node (node, "target");
+  Node* wtarget = map_get_node (node, "build");
   if (wtarget && wtarget->kind == NODE_STRING) {
-    wconf->target = wtarget->string;
+    wconf->build = wtarget->string;
   } else {
-    wconf->target = DEFAULT_TARGET_PATH;
+    wconf->build = DEFAULT_TARGET_PATH;
   }
 }
 
@@ -76,11 +76,13 @@ void dset_profile_config (HashMap* pconf, Node* node) {
     const char* key = node->map.entries[i].key;
     Node* val = node->map.entries[i].val;
 
-    if (!key || !val || val->kind != NODE_SEQUENCE) continue;
+    if (!key || !val || val->kind != NODE_LIST) continue;
 
-    Vector* flags = z3_new_vec (char*);
-    for (size_t j = 0; j < val->sequence.size; j++) {
-      Node* vi = val->sequence.items[j];
+    Vector* flags = calloc (1, sizeof(Vector));
+    flags->esz = sizeof(char*);
+    z3_vec_init_capacity(*flags, 16);
+    for (size_t j = 0; j < val->list.size; j++) {
+      Node* vi = val->list.items[j];
       if (vi && vi->kind == NODE_STRING) {
         z3_push (*flags, vi->string);
       }
@@ -91,18 +93,18 @@ void dset_profile_config (HashMap* pconf, Node* node) {
 }
 
 void dset_target_config (BuildTarget* tconf, Node* node) {
-  if (!node || node->kind != NODE_SEQUENCE) return;
-  if (node->sequence.size == 0) {
+  if (!node || node->kind != NODE_LIST) return;
+  if (node->list.size == 0) {
     tconf->count = 0;
     tconf->target = nullptr;
     return;
   }
 
-  tconf->count = node->sequence.size;
-  tconf->target = (TargetConfig**)malloc (sizeof (TargetConfig) * node->sequence.size);
-  for (size_t i = 0; i < node->sequence.size; i++) {
+  tconf->count = node->list.size;
+  tconf->target = (TargetConfig**)malloc (sizeof (TargetConfig) * node->list.size);
+  for (size_t i = 0; i < node->list.size; i++) {
     TargetConfig* tari = malloc (sizeof (TargetConfig));
-    Node* tnode = node->sequence.items[i];
+    Node* tnode = node->list.items[i];
     Node* name = map_get_node (tnode, "name");
     tari->name = (name && name->kind == NODE_STRING) ? name->string : nullptr;
 
@@ -113,11 +115,11 @@ void dset_target_config (BuildTarget* tconf, Node* node) {
     tari->main = (main && main->kind == NODE_STRING) ? main->string : nullptr;
 
     tnode = map_get_node (tnode, "for");
-    if (tnode && tnode->kind == NODE_SEQUENCE) {
-      tari->target_count = tnode->sequence.size;
-      tari->target = (const char**)malloc (sizeof (char*) * tnode->sequence.size);
-      for (size_t j = 0; j < tnode->sequence.size; ++j) {
-        Node* elem = tnode->sequence.items[j];
+    if (tnode && tnode->kind == NODE_LIST) {
+      tari->target_count = tnode->list.size;
+      tari->target = (const char**)malloc (sizeof (char*) * tnode->list.size);
+      for (size_t j = 0; j < tnode->list.size; ++j) {
+        Node* elem = tnode->list.items[j];
         tari->target[j] = (elem && elem->kind == NODE_STRING) ? elem->string : nullptr;
       }
     } else {
@@ -168,11 +170,11 @@ void dset_build_config (BuildConfig* bconf, Node* node) {
 
   // --- deps ---
   Node* deps = map_get_node (node, "deps");
-  if (deps && deps->kind == NODE_SEQUENCE) {
-    bconf->deps_count = deps->sequence.size;
+  if (deps && deps->kind == NODE_LIST) {
+    bconf->deps_count = deps->list.size;
     bconf->deps = malloc (sizeof (DependencyConfig) * bconf->deps_count);
     for (size_t i = 0; i < bconf->deps_count; ++i) {
-      dset_dependency_config (&bconf->deps[i], deps->sequence.items[i]);
+      dset_dependency_config (&bconf->deps[i], deps->list.items[i]);
     }
   } else {
     bconf->deps = nullptr;
@@ -206,7 +208,7 @@ void dset_anvil_config (AnvilConfig* conf, Node* node) {
 
   // --- Targets ---
   Node* targets_node = map_get_node (node, "targets");
-  if (targets_node && targets_node->kind == NODE_SEQUENCE) {
+  if (targets_node && targets_node->kind == NODE_LIST) {
     conf->targets = malloc (sizeof (BuildTarget));
     dset_target_config (conf->targets, targets_node);
   } else {
