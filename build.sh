@@ -144,7 +144,7 @@ EOF
   local target_main="${target_main/#\#\{AWD\}/${THIS_PARENT}}"
 
   case "${BARG_SUBCOMMAND}" in
-    check) clang_check "${@}" ;;
+    check) clang_check "${args[@]}" ;;
     expand) exec clang -E "-I${LIBS_DIR}" -x c -std=c23 "${RECIPE[@]}" ;;
   esac
 

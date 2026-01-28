@@ -36,7 +36,7 @@ typedef struct {
 
 typedef struct {
   const char* libs;
-  const char* target;
+  const char* build;
 } WorkspaceConfig;
 
 typedef struct {
@@ -49,6 +49,7 @@ typedef struct {
   const char* type;
   const char* main;
   const char** target;
+  // HashMap* macros; // TODO
   size_t target_count;
 } TargetConfig;
 
