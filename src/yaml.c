@@ -635,9 +635,8 @@ static Node* parse_list (YamlParser* yp) {
   return node;
 }
 
-static Node* parse_map (YamlParser* yp) {
+static void parse_map (YamlParser* yp, Node* node) {
   yp->root_mark++;
-  Node* node = create_node (NODE_MAP);
 
   TokenKind expected_next = TOKEN_UNKNOWN;
   while (true) {
@@ -678,46 +677,45 @@ static Node* parse_map (YamlParser* yp) {
       // this is… not ideal, but doing this way, stops earlier
       char c = skip_all_whitespace (yp);
 
-      if (c != CHAR_OPEN_BRACE && c != CHAR_ASTERISK) {
-        token = next_token (yp);  // just needed for error
-        parser_error (
-          yp,
-          (YamlError) {
-            .kind = UNEXPECTED_TOKEN,
-            .exp = "map or map alias",
-            .got = token_kind_to_string (token.kind),
-          }
-        );
+      if (c == CHAR_OPEN_BRACE) {  // literal map
+        token = next_token (yp);   // consume token, as parse_value does
+        parse_map (yp, node);      // just append to current map
+        continue;
       }
 
-      Node* value = parse_value (yp);
+      if (c == CHAR_ASTERISK) {  // alias, unknown type
+        Node* value = parse_value (yp);
 
-      if (value->kind != NODE_MAP) {
-        parser_error (
-          yp,
-          (YamlError) {
-            .kind = UNEXPECTED_TOKEN,
-            .exp = "map",
-            .got = node_kind_names[value->kind],
-          }
-        );
-      }
+        if (value->kind != NODE_MAP) {
+          parser_error (
+            yp,
+            (YamlError) {
+              .kind = UNEXPECTED_TOKEN,
+              .exp = "map",
+              .got = node_kind_names[value->kind],
+            }
+          );
+        }
 
-      for (size_t j = 0; j < value->map.size; j++) {
-        if (value->rcount > 0) value->map.entries[j].val->rcount++;
-        map_add (&node->map, value->map.entries[j].key, value->map.entries[j].val);
-      }
+        for (size_t j = 0; j < value->map.size; j++) {
+          if (value->rcount > 0) value->map.entries[j].val->rcount++;
+          map_add (&node->map, value->map.entries[j].key, value->map.entries[j].val);
+        }
 
-      // all values are moved to this object
-      // alias case, just unlink it, as childs are incremented
-      if (value->rcount > 0) {
         value->rcount--;
-      } else {
-        free (value->map.entries);
-        free (value);
+
+        continue;
       }
 
-      continue;
+      token = next_token (yp);  // just needed for error
+      parser_error (
+        yp,
+        (YamlError) {
+          .kind = UNEXPECTED_TOKEN,
+          .exp = "map or map alias",
+          .got = token_kind_to_string (token.kind),
+        }
+      );
     }
 
     Node* val = parse_value (yp);
@@ -737,7 +735,6 @@ static Node* parse_map (YamlParser* yp) {
   }
 
   yp->root_mark--;
-  return node;
 }
 
 Node* parse_value (YamlParser* yp) {
@@ -803,7 +800,9 @@ Node* parse_value (YamlParser* yp) {
     }
 
     case TOKEN_OPEN_MAP:
-      return parse_map (yp);
+      Node* node = create_node (NODE_MAP);
+      parse_map (yp, node);
+      return node;
 
     case TOKEN_OPEN_SEQ:
       return parse_list (yp);
@@ -870,7 +869,8 @@ Node* parse_yaml (const char* filepath, YamlStore* store) {
 
     case TOKEN_OPEN_MAP:
       yp.root_mark++;  // it is flow already
-      root = parse_map (&yp);
+      root = create_node (NODE_MAP);
+      parse_map (&yp, root);
       break;
 
     case TOKEN_KEY:
@@ -885,7 +885,8 @@ Node* parse_yaml (const char* filepath, YamlStore* store) {
         z3_drops ((String*)z3_get (store->strs, 1));
       }
 
-      root = parse_map (&yp);
+      root = create_node (NODE_MAP);
+      parse_map (&yp, root);
       break;
 
     default:
@@ -965,28 +966,6 @@ const char* node_kind_names[] = {
   [NODE_NUMBER] = "NODE_NUMBER",
   [NODE_BOOLEAN] = "NODE_BOOLEAN"
 };
-
-// clang-format off
-// Define valid character sets for both types
-const uint8_t char_flags[256] = {
-    ['0'] = 3, ['1'] = 3, ['2'] = 3, ['3'] = 3, ['4'] = 3, ['5'] = 3, ['6'] = 3,
-    ['7'] = 3, ['8'] = 3, ['9'] = 3,
-
-    ['<'] = 2, [':'] = 2,  // add all symbols allowed in YAML keys, all with 2 as value
-
-    ['a'] = 2, ['b'] = 2, ['c'] = 2, ['d'] = 2, ['e'] = 3, ['f'] = 2, ['g'] = 2,
-    ['h'] = 2, ['i'] = 2, ['j'] = 2, ['k'] = 2, ['l'] = 2, ['m'] = 2, ['n'] = 2,
-    ['o'] = 2, ['p'] = 2, ['q'] = 2, ['r'] = 2, ['s'] = 2, ['t'] = 2, ['u'] = 2,
-    ['v'] = 2, ['w'] = 2, ['x'] = 2, ['y'] = 2, ['z'] = 2,
-
-    ['A'] = 2, ['B'] = 2, ['C'] = 2, ['D'] = 2, ['E'] = 3, ['F'] = 2, ['G'] = 2,
-    ['H'] = 2, ['I'] = 2, ['J'] = 2, ['K'] = 2, ['L'] = 2, ['M'] = 2, ['N'] = 2,
-    ['O'] = 2, ['P'] = 2, ['Q'] = 2, ['R'] = 2, ['S'] = 2, ['T'] = 2, ['U'] = 2,
-    ['V'] = 2, ['W'] = 2, ['X'] = 2, ['Y'] = 2, ['Z'] = 2,
-
-    ['_'] = 2, ['-'] = 3, ['.'] = 3, ['+'] = 3,
-};
-// clang-format on
 
 #ifdef _YAML_TEST
 
