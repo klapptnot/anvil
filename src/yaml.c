@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2025-present Klapptnot
 
-#include <assert.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#ifdef _YAML_TEST
+#ifdef TEST_YAML_PARSER
+#include <stdio.h>
 #define Z3_TOYS_IMPL
 #define Z3_STRING_IMPL
 #endif
+
+#include <notrust.h>
 #include <yaml.h>
 #include <z3_string.h>
 #include <z3_toys.h>
@@ -24,9 +23,8 @@
 
 #include "paerr.c"  // NOLINT (bugprone-suspicious-include)
 
-extern const char* const token_kind_strings[];
-const char* node_kind_names[];
-extern const uint8_t char_flags[256];
+extern nstr token_kind_strings[];
+extern nstr node_kind_names[];
 static Node* parse_value (YamlParser* yp);
 
 #define token_kind_to_string(kind) token_kind_strings[kind]
@@ -40,7 +38,7 @@ static Node* parse_value (YamlParser* yp);
     .kind = (k), .raw = (v), .length = (l) \
   }
 
-static int fd_open_file (const char* filepath) {
+static i32 fd_open_file (nstr filepath) {
   if (!filepath) return -1;
 
   int fd = open (filepath, O_RDONLY | O_NONBLOCK);
@@ -55,21 +53,20 @@ static int fd_open_file (const char* filepath) {
   return fd;
 }
 
-static ssize_t refill_buffers (YamlParser* yp) {
-  ssize_t n = read (yp->iffd, yp->chunk, YAML_CHUNK_SIZE);
+static void refill_buffers (YamlParser* yp) {
+  i64 n = read (yp->iffd, yp->chunk, YAML_CHUNK_SIZE);
   // NOLINTNEXTLINE (concurrency-mt-unsafe)
   if (n < 0) die ("could not continue reading file: %s", strerror (errno));
 
   yp->cpos = 0;
-  yp->blen = (uint16_t)n;
+  yp->blen = (u16)n;
   yp->reof = n == 0;
-  return n;
 }
 
 // Peek at current character without advancing the position
 [[clang::always_inline]]
-static char peek_char (YamlParser* yp) {
-  return yp->chunk[yp->cpos];
+static c8 peek_char (YamlParser* yp) {
+  return (c8)yp->chunk[yp->cpos];
 }
 
 [[clang::always_inline]]
@@ -119,11 +116,11 @@ static void skip_whitespace (YamlParser* yp) {
   }
 }
 
-static char skip_all_whitespace (YamlParser* yp) {
+static c8 skip_all_whitespace (YamlParser* yp) {
   while (!eof_reached (yp)) {
     skip_whitespace (yp);
 
-    char c = peek_char (yp);
+    c8 c = peek_char (yp);
     if (c != CHAR_NEWLINE) return c;
 
     // it IS a newline, do-while
@@ -139,40 +136,40 @@ static char skip_all_whitespace (YamlParser* yp) {
   return CHAR_EOF;
 }
 
-static String* get_string_line (YamlParser* yp, size_t reqsz) {
+static String* get_string_line (YamlParser* yp, usize reqsz) {
   YamlStore* store = yp->store;
 
-  for (size_t i = 0; i < store->strs.len; i++) {
-    String* curstr = z3_get (store->strs, i);
+  for (usize i = 0; i < store->str_pools.len; i++) {
+    String* curstr = z3_get (store->str_pools, i);
     if (reqsz + 1 < curstr->max - curstr->len) return curstr;
     // if (reqsz + curstr->len < curstr->max) return curstr;
   }
 
   if (reqsz >= STR_ALLOC_SIZE_BASE) {
     String nz3s = z3_str (reqsz);
-    size_t len = yp->store->bigs.len;
+    usize len = yp->store->owned_strs.len;
 
-    z3_push (yp->store->bigs, nz3s);
-    return z3_get (yp->store->bigs, len);
+    z3_push (yp->store->owned_strs, nz3s);
+    return z3_get (yp->store->owned_strs, len);
   }
 
   String nz3s = z3_str (STR_ALLOC_SIZE_BASE);
-  z3_push (store->strs, nz3s);
+  z3_push (store->str_pools, nz3s);
 
-  return z3_get (store->strs, store->strs.len - 1);
+  return z3_get (store->str_pools, store->str_pools.len - 1);
 }
 
 static Token try_string_unesc (YamlParser* yp) {
   skip_char (yp);  // skip opening quote
 
   ScopedString s = z3_str (HEAP_VALUE_MIN_SIZE);
-  char ilubsm[STR_ALLOC_SIZE_BASE] = {0};
-  uint16_t len = 0;
+  c8 ilubsm[STR_ALLOC_SIZE_BASE] = {0};
+  u16 len = 0;
 
   while (!eof_reached (yp) && peek_char (yp) != CHAR_QUOTE_DOUBLE &&
          peek_char (yp) != CHAR_NEWLINE) {
     if (len >= STR_ALLOC_SIZE_BASE) {
-      z3_pushl (&s, ilubsm, len);
+      z3_pushl (&s, (nstr)ilubsm, len);
       len = 0;
     }
     ilubsm[len++] = peek_char (yp);
@@ -180,7 +177,7 @@ static Token try_string_unesc (YamlParser* yp) {
   }
 
   if (peek_char (yp) != CHAR_QUOTE_DOUBLE) {
-    char c = peek_char (yp);
+    c8 c = peek_char (yp);
     parser_error (
       yp,
       (YamlError) {.kind = UNCLOSED_QUOTE, .got = !eof_reached (yp) ? &c : "EOF", .exp = "\""}
@@ -189,16 +186,16 @@ static Token try_string_unesc (YamlParser* yp) {
   if (len > 0) z3_pushl (&s, ilubsm, len);
 
   String unesc = z3_unescape (s.chr, s.len);
-  z3_push (yp->store->bigs, unesc);
+  z3_push (yp->store->owned_strs, unesc);
 
   skip_char (yp);  // skip closing quote
 
-  return (yp->cur_token = create_token (TOKEN_STRING, unesc.chr, (uint32_t)unesc.len));
+  return (yp->cur_token = create_token (TOKEN_STRING, unesc.chr, (u32)unesc.len));
 }
 
 static Token try_string_lit (YamlParser* yp) {
-  char ilubsm[STR_ALLOC_SIZE_BASE] = {0};
-  uint16_t len = 0;
+  c8 ilubsm[STR_ALLOC_SIZE_BASE] = {0};
+  u16 len = 0;
   String* hold = nullptr;
 
   while (peek_char (yp) == CHAR_QUOTE_SINGLE) {
@@ -217,7 +214,7 @@ static Token try_string_lit (YamlParser* yp) {
     }
 
     if (peek_char (yp) != CHAR_QUOTE_SINGLE) {
-      char c = peek_char (yp);
+      c8 c = peek_char (yp);
       parser_error (
         yp,
         (YamlError) {// ugh :anger:
@@ -243,18 +240,18 @@ static Token try_string_lit (YamlParser* yp) {
     ilubsm[len++] = peek_char (yp);
   }
 
-  char* start = nullptr;
-  uint32_t tlen = 0;
+  ustr start = nullptr;
+  u32 tlen = 0;
 
   if (hold) {
     start = hold->chr;
     if (len > 0) z3_pushl (hold, ilubsm, len);
-    tlen = (uint32_t)hold->len;
+    tlen = (u32)hold->len;
   } else {
     hold = get_string_line (yp, len);
-    size_t beginning = hold->len;
+    usize beginning = hold->len;
     if (len > 0) z3_pushl (hold, ilubsm, len);
-    tlen = (uint32_t)(hold->len - beginning);
+    tlen = (u32)(hold->len - beginning);
     z3_pushc (hold, 0);
     start = (hold->chr + beginning);
   }
@@ -262,9 +259,9 @@ static Token try_string_lit (YamlParser* yp) {
   return (yp->cur_token = create_token (TOKEN_STRING_LIT, start, tlen));
 }
 
-static Token try_anchor_or_alias (YamlParser* yp, char prefix) {
-  char ilubsm[STR_ALLOC_SIZE_BASE];
-  uint32_t len = 0;
+static Token try_anchor_or_alias (YamlParser* yp, c8 prefix) {
+  c8 ilubsm[STR_ALLOC_SIZE_BASE];
+  u32 len = 0;
   String* hold = nullptr;
 
   while (!eof_reached (yp) && is_valid_anchor (peek_char (yp))) {
@@ -277,18 +274,18 @@ static Token try_anchor_or_alias (YamlParser* yp, char prefix) {
     skip_char (yp);
   }
 
-  char* start = nullptr;
-  uint32_t tlen = 0;
+  ustr start = nullptr;
+  u32 tlen = 0;
 
   if (hold) {
     if (len > 0) z3_pushl (hold, ilubsm, len);
     start = hold->chr;
-    tlen = (uint32_t)hold->len;
+    tlen = (u32)hold->len;
   } else {
     hold = get_string_line (yp, len);
-    size_t beginning = hold->len;
+    usize beginning = hold->len;
     if (len > 0) z3_pushl (hold, ilubsm, len);
-    tlen = (uint32_t)(hold->len - beginning);
+    tlen = (u32)(hold->len - beginning);
     z3_pushc (hold, 0);
     start = (hold->chr + beginning);
   }
@@ -297,29 +294,29 @@ static Token try_anchor_or_alias (YamlParser* yp, char prefix) {
   return (yp->cur_token = create_token (kind, start, tlen));
 }
 
-static int try_number (YamlParser* yp, char* ilubsm) {
-  uint32_t len = 0;
+static int try_number (YamlParser* yp, ustr ilubsm) {
+  u32 len = 0;
   while (!eof_reached (yp) && is_number_parseable (peek_char (yp))) {
     if (len >= MAX_NUMBER_LENGTH) {  // MAX_NUMBER_LENGTH
       parser_error (yp, (YamlError) {.kind = NUMBER_TOO_LONG, .got = "", .exp = ""});
     }
-    ilubsm[len++] = peek_char (yp);
+    ilubsm[len++] = (u8)peek_char (yp);
     skip_char (yp);
   }
 
-  char c = peek_char (yp);
+  c8 c = peek_char (yp);
   return ((int)eof_reached (yp) || is_valid_delim (c)) ? (int)len : -1;
 }
 
-static int try_boolean (YamlParser* yp, char* ilubsm) {
-  const char* pattern = (peek_char (yp) == 't') ? "true" : "false";
+static i32 try_boolean (YamlParser* yp, ustr ilubsm) {
+  nstr pattern = (peek_char (yp) == 't') ? "true" : "false";
   skip_char (yp);
-  uint32_t len = 1;
+  u32 len = 1;
 
   for (; pattern[len] != '\0'; len++) {
-    if ((int)eof_reached (yp) || peek_char (yp) != pattern[len]) {
+    if ((i32)eof_reached (yp) || peek_char (yp) != pattern[len]) {
       memcpy (ilubsm, pattern, len);  // trx -> i == 2 -> push tr and leaves x
-      return (int)(len + 'x');
+      return (i32)(len + 'x');
     }
     skip_char (yp);
   }
@@ -329,27 +326,27 @@ static int try_boolean (YamlParser* yp, char* ilubsm) {
 
   // z3_pushl (s, pattern, pattern[4] == '\0' ? 4 : 5);
 
-  char c = peek_char (yp);
-  if ((int)eof_reached (yp) || is_valid_delim (c)) return which_bool;
+  c8 c = peek_char (yp);
+  if ((i32)eof_reached (yp) || is_valid_delim (c)) return which_bool;
 
-  return (int)(len + 'x');
+  return (i32)(len + 'x');
 }
 
-static Token try_key (YamlParser* yp, char* ilubsm, uint32_t blen) {
-  uint32_t len = blen;
+static Token try_key (YamlParser* yp, ustr ilubsm, u32 blen) {
+  u32 len = blen;
   while (!eof_reached (yp)) {
     if (len >= STR_ALLOC_SIZE_BASE)
       parser_error (yp, (YamlError) {.kind = KEY_TOO_LONG, .exp = "", .got = ""});
 
     if (peek_char (yp) == CHAR_COLON) {
       skip_char (yp);
-      if ((int)eof_reached (yp) || peek_char (yp) == CHAR_SPACE) break;
+      if ((i32)eof_reached (yp) || peek_char (yp) == CHAR_SPACE) break;
 
       ilubsm[len++] = CHAR_COLON;
       continue;
     }
 
-    ilubsm[len++] = peek_char (yp);
+    ilubsm[len++] = (u8)peek_char (yp);
     skip_char (yp);
   }
 
@@ -357,16 +354,16 @@ static Token try_key (YamlParser* yp, char* ilubsm, uint32_t blen) {
     parser_error (yp, (YamlError) {.kind = KEY_TOO_LONG, .exp = "", .got = ""});
 
   String* hold = get_string_line (yp, len);
-  char* start = hold->len == 0 ? hold->chr : hold->chr + hold->len;
+  cstr start = hold->len == 0 ? hold->chr : hold->chr + hold->len;
 
-  if (len > 0) z3_pushl (hold, ilubsm, len);
+  if (len > 0) z3_pushl (hold, (nstr)ilubsm, len);
   z3_pushc (hold, 0);
 
-  return (yp->cur_token = create_token (TOKEN_KEY, start, (uint32_t)len));
+  return (yp->cur_token = create_token (TOKEN_KEY, start, len));
 }
 
 static Token next_token (YamlParser* yp) {
-  char prefix_char = 0;
+  c8 prefix_char = 0;
 go_back_to_start:
   if (eof_reached (yp)) {
     yp->cur_token = (Token) {.kind = TOKEN_EOF, .raw = nullptr, .length = 0};
@@ -374,7 +371,7 @@ go_back_to_start:
   }
 
   skip_whitespace (yp);
-  char c = peek_char (yp);
+  c8 c = peek_char (yp);
 
   switch (c) {
     case CHAR_NEWLINE:
@@ -432,26 +429,26 @@ go_back_to_start:
         return try_anchor_or_alias (yp, prefix_char);
       }
 
-      char ilubsm[STR_ALLOC_SIZE_BASE];
-      uint32_t len = 0;
+      u8 ilubsm[STR_ALLOC_SIZE_BASE];
+      u32 len = 0;
 
       if (is_number_parseable (c)) {
-        int tlen = try_number (yp, ilubsm);
-        len = (uint32_t)tlen;
+        i32 tlen = try_number (yp, ilubsm);
+        len = (u32)tlen;
 
         if (tlen != -1) {
           String* hold = get_string_line (yp, len);
 
-          char* start = hold->len == 0 ? hold->chr : hold->chr + hold->len;
-          if (len > 0) z3_pushl (hold, ilubsm, len);
+          ustr start = hold->len == 0 ? hold->chr : hold->chr + hold->len;
+          if (len > 0) z3_pushl (hold, (nstr)ilubsm, len);
           z3_pushc (hold, 0);
 
-          return create_token (TOKEN_NUMBER, start, (uint32_t)tlen);
+          return create_token (TOKEN_NUMBER, start, (u32)tlen);
         }
       } else if (c == 't' || c == 'f') {
-        int is_bool = try_boolean (yp, ilubsm);
-        if (is_bool < 'x') return create_token (TOKEN_BOOLEAN, nullptr, (uint32_t)is_bool);
-        len = (uint32_t)(is_bool - 'x');
+        i32 is_bool = try_boolean (yp, ilubsm);
+        if (is_bool < 'x') return create_token (TOKEN_BOOLEAN, nullptr, (u32)is_bool);
+        len = (u32)(is_bool - 'x');
       }
 
       return try_key (yp, ilubsm, len);
@@ -507,14 +504,14 @@ static void free_node (Node* node) {
 
   switch (node->kind) {
     case NODE_MAP:
-      for (size_t i = 0; i < node->map.size; i++) {
+      for (usize i = 0; i < node->map.size; i++) {
         free_node (node->map.entries[i].val);
       }
       free (node->map.entries);
       break;
 
     case NODE_LIST:
-      for (size_t i = 0; i < node->list.size; i++) {
+      for (usize i = 0; i < node->list.size; i++) {
         free_node (node->list.items[i]);
       }
       free ((void*)node->list.items);
@@ -531,7 +528,7 @@ static void free_node (Node* node) {
   node = nullptr;
 }
 
-static void map_add (YamlMap* map, char* key, Node* val) {
+static void map_add (YamlMap* map, cstr key, Node* val) {
   if (map->size >= map->capacity) {
     map->capacity *= 2;
     YamlMapEntry* new_entries =
@@ -562,13 +559,13 @@ static void list_add (YamlList* seq, Node* item) {
   seq->size++;
 }
 
-static Node* parse_alias (YamlParser* yp, const char* alias) {
-  size_t aliases = yp->aliases.len;
+static Node* parse_alias (YamlParser* yp, cstr alias) {
+  usize aliases = yp->aliases.len;
   if (aliases == 0) return nullptr;
 
-  for (size_t i = 0; i < aliases; i++) {
+  for (usize i = 0; i < aliases; i++) {
     YamlAlias* a = (YamlAlias*)z3_get (yp->aliases, i);
-    if (strcmp (a->name, alias) == 0) {
+    if (strcmp ((nstr)a->name, (nstr)alias) == 0) {
       return a->value;
     }
   }
@@ -578,21 +575,17 @@ static Node* parse_alias (YamlParser* yp, const char* alias) {
 static Node* parse_number (Token token) {
   Node* node = create_node (NODE_NUMBER);
 
-  char* ver_value = malloc (token.length);
-
-  if (ver_value == NULL) die ("Out of memory allocating %d bytes", token.length);
-
-  const char* value = token.raw;
-  size_t i = 0;
-  size_t l = 0;
+  u8 ver_value[MAX_NUMBER_LENGTH] = {0};
+  cstr value = token.raw;
+  u8 i = 0;
+  u8 l = 0;
   while (i++ <= token.length) {
     // Allowing `1_000_000` to be `1000000`
     if (value[i] == '_') continue;
     ver_value[l++] = value[i];
   }
 
-  node->number = strtod (value, nullptr);
-  free (ver_value);
+  node->number = strtod ((nstr)value, nullptr);
   return node;
 }
 
@@ -675,7 +668,7 @@ static void parse_map (YamlParser* yp, Node* node) {
 
     if (token.length == 2 && !memcmp (token.raw, "<<", 2)) {
       // this is… not ideal, but doing this way, stops earlier
-      char c = skip_all_whitespace (yp);
+      c8 c = skip_all_whitespace (yp);
 
       if (c == CHAR_OPEN_BRACE) {  // literal map
         token = next_token (yp);   // consume token, as parse_value does
@@ -697,7 +690,7 @@ static void parse_map (YamlParser* yp, Node* node) {
           );
         }
 
-        for (size_t j = 0; j < value->map.size; j++) {
+        for (usize j = 0; j < value->map.size; j++) {
           if (value->rcount > 0) value->map.entries[j].val->rcount++;
           map_add (&node->map, value->map.entries[j].key, value->map.entries[j].val);
         }
@@ -759,7 +752,7 @@ Node* parse_value (YamlParser* yp) {
           yp,
           (YamlError) {// plz clang-format v22 in arch :sob:
                        .kind = REDEFINED_ALIAS,
-                       .got = token.raw,
+                       .got = (nstr)token.raw,
                        .exp = ""
           }
         );
@@ -776,7 +769,9 @@ Node* parse_value (YamlParser* yp) {
     case TOKEN_ALIAS: {
       Node* value = parse_alias (yp, token.raw);
       if (value == nullptr)
-        parser_error (yp, (YamlError) {.kind = UNDEFINED_ALIAS, .got = token.raw, .exp = ""});
+        parser_error (
+          yp, (YamlError) {.kind = UNDEFINED_ALIAS, .got = (nstr)token.raw, .exp = ""}
+        );
 
       value->rcount++;
       return value;
@@ -825,26 +820,26 @@ void free_yaml (Node* node) {
   node = nullptr;
 }
 
-Node* parse_yaml (const char* filepath, YamlStore* store) {
+Node* parse_yaml (nstr filepath, YamlStore* store) {
   int file_fd = fd_open_file (filepath);
 
-  store->strs = z3_vec (String);
-  store->bigs = z3_vec (String);
+  store->str_pools = z3_vec (String);
+  store->owned_strs = z3_vec (String);
 
-  z3_vec_init_capacity (store->strs, 4);
-  z3_vec_init_capacity (store->bigs, 4);
+  z3_vec_init_capacity (store->str_pools, 4);
+  z3_vec_init_capacity (store->owned_strs, 4);
 
   String fst = z3_str (STR_ALLOC_SIZE_BASE);
   z3_pushl (&fst, filepath, strlen (filepath));
   z3_pushc (&fst, 0);
-  z3_push (store->strs, fst);
+  z3_push (store->str_pools, fst);
 
-  size_t curr_str_len = fst.len;
+  usize curr_str_len = fst.len;
 
   // NOLINTNEXTLINE (concurrency-mt-unsafe)
   if (file_fd < 0) die ("could not open file %s: %s\n", filepath, strerror (errno));
 
-  char yaml_chunk[YAML_CHUNK_SIZE];
+  u8 yaml_chunk[YAML_CHUNK_SIZE];
 
   YamlParser yp = {0};
   yp.store = store;
@@ -879,10 +874,10 @@ Node* parse_yaml (const char* filepath, YamlStore* store) {
       yp.line = 0;
       yp.lpos = 0;
 
-      if (((String*)z3_get (store->strs, 0))->len != curr_str_len) {
-        ((String*)z3_get (store->strs, 0))->len = curr_str_len;
+      if (((String*)z3_get (store->str_pools, 0))->len != curr_str_len) {
+        ((String*)z3_get (store->str_pools, 0))->len = curr_str_len;
       } else {
-        z3_drops ((String*)z3_get (store->strs, 1));
+        z3_drops ((String*)z3_get (store->str_pools, 1));
       }
 
       root = create_node (NODE_MAP);
@@ -895,12 +890,12 @@ Node* parse_yaml (const char* filepath, YamlStore* store) {
       yp.line = 0;
       yp.lpos = 0;
 
-      if (((String*)z3_get (store->strs, 0))->len != curr_str_len) {
-        ((String*)z3_get (store->strs, 0))->len = curr_str_len;
-      } else if (store->strs.len == 2) {
-        z3_drops ((String*)z3_get (store->strs, 1));
+      if (((String*)z3_get (store->str_pools, 0))->len != curr_str_len) {
+        ((String*)z3_get (store->str_pools, 0))->len = curr_str_len;
+      } else if (store->str_pools.len == 2) {
+        z3_drops ((String*)z3_get (store->str_pools, 1));
       } else {
-        z3_drops ((String*)z3_get (store->bigs, 0));
+        z3_drops ((String*)z3_get (store->owned_strs, 0));
       }
 
       root = parse_value (&yp);
@@ -924,14 +919,14 @@ Node* parse_yaml (const char* filepath, YamlStore* store) {
   return root;
 }
 
-Node* map_get_node (Node* node, const char* key) {
+Node* map_get_node (Node* node, nstr key) {
   if (!node || node->kind != NODE_MAP) {
     errpfmt ("not a map\n");
     return nullptr;
   }
 
-  for (size_t i = 0; i < node->map.size; i++) {
-    if (strcmp (node->map.entries[i].key, key) == 0) {
+  for (usize i = 0; i < node->map.size; i++) {
+    if (strcmp ((nstr)node->map.entries[i].key, key) == 0) {
       return node->map.entries[i].val;
     }
   }
@@ -939,7 +934,7 @@ Node* map_get_node (Node* node, const char* key) {
   return nullptr;
 }
 
-const char* const token_kind_strings[] = {
+nstr token_kind_strings[] = {
   "TOKEN_UNKNOWN",     // 0
   "TOKEN_KEY",         // 1
   "TOKEN_STRING",      // 2
@@ -959,7 +954,7 @@ const char* const token_kind_strings[] = {
   "TOKEN_DEDENT",      // 18
 };
 
-const char* node_kind_names[] = {
+nstr node_kind_names[] = {
   [NODE_MAP] = "NODE_MAP",
   [NODE_LIST] = "NODE_LIST",
   [NODE_STRING] = "NODE_STRING",
@@ -967,30 +962,28 @@ const char* node_kind_names[] = {
   [NODE_BOOLEAN] = "NODE_BOOLEAN"
 };
 
-#ifdef _YAML_TEST
-
+#ifdef TEST_YAML_PARSER
 #define node_kind_to_string(kind) node_kind_names[kind]
-
 #define token_dbg(t, token)                                                              \
   {                                                                                      \
-    char* v = token_value (t, token);                                                    \
+    cstr v = token_value (t, token);                                                     \
     printf (                                                                             \
       "TOKEN: ~%3zu %36s '%s'\n", (token).length, token_kind_to_string ((token).kind), v \
     );                                                                                   \
     free (v);                                                                            \
   }
 
-[[clang::always_inline]] static const char* node_value (Node* node) {
-  static char _buf[20];  // NOLINT (readability-magic-numbers)
+[[clang::always_inline]] static nstr node_value (Node* node) {
+  static c8 _buf[20];  // NOLINT (readability-magic-numbers)
 
   switch (node->kind) {
     case NODE_STRING:
-      return node->string;
+      return (nstr)node->string;
     case NODE_NUMBER:
       snprintf (_buf, sizeof (_buf), "%f", node->number);
       return _buf;
     case NODE_BOOLEAN:
-      return (int)node->boolean ? "true" : "false";
+      return (i32)node->boolean ? "true" : "false";
     default:
       return "UNKNOWN";
   }
@@ -998,7 +991,7 @@ const char* node_kind_names[] = {
 
 void map_walk (Node* node, int indent);
 static void list_walk (Node* node, int indent) {
-  for (size_t i = 0; i < node->list.size; i++) {
+  for (usize i = 0; i < node->list.size; i++) {
     Node* value = node->list.items[i];
     if (value->kind == NODE_MAP) {
       printf (
@@ -1036,8 +1029,8 @@ static void list_walk (Node* node, int indent) {
 }
 
 void map_walk (Node* node, int indent) {
-  for (size_t i = 0; i < node->map.size; i++) {
-    char* name = node->map.entries[i].key;
+  for (usize i = 0; i < node->map.size; i++) {
+    cstr name = node->map.entries[i].key;
     Node* value = node->map.entries[i].val;
     if (value->kind == NODE_MAP) {
       printf (
@@ -1077,40 +1070,91 @@ void map_walk (Node* node, int indent) {
   }
 }
 
+static void print_token (Token tok) {
+  printf (
+    "\033[1;35mTOKEN\033[0m [\033[1;33m%3u\033[0m] \033[1;36m%-20s\033[0m ",
+    tok.length,
+    token_kind_strings[tok.kind]
+  );
+
+  if (tok.raw == nullptr) {
+    printf ("\033[91m<null>\033[0m\n");
+    return;
+  }
+
+  /* Print hex */
+  printf ("\033[90mhex[\033[0m");
+  for (u32 _i = 0; _i < (tok).length; _i++) {
+    printf ("\033[32m%02X\033[0m", tok.raw[_i]);
+    if (_i < (tok).length - 1) printf (" ");
+  }
+  printf ("\033[90m]\033[0m ");
+
+  /* Print string */
+  printf ("\033[90mstr[\033[0m\033[1;37m");
+  for (u32 _i = 0; _i < (tok).length; _i++) {
+    u8 c = (tok).raw[_i];
+    if (c >= 0x20 && c <= 0x7e)
+      printf ("%c", c);
+    else
+      printf ("\033[91m·\033[1;37m");
+  }
+  printf ("\033[0m\033[90m]\033[0m\n");
+}
+
+#define BYTES_PER_DUMP_LINE 16
+static void hex_dump (cstr buf, usize len) {
+  for (usize off = 0; off < len; off += BYTES_PER_DUMP_LINE) { /* hex column */
+    for (usize i = 0; i < BYTES_PER_DUMP_LINE; i++) {
+      if (off + i < len)
+        printf ("%02x ", buf[off + i]);
+      else
+        printf ("   ");
+    }
+    printf ("-> "); /* char column */
+    for (usize i = 0; i < BYTES_PER_DUMP_LINE; i++) {
+      if (off + i < len) {
+        u8 c = buf[off + i];
+        if (isprint (c))
+          putchar (c);
+        else
+          printf ("\x1b[31m.\x1b[0m");
+      } else {
+        putchar (' ');
+      }
+    }
+    putchar ('\n');
+  }
+}
+
 z3_vec_drop_fn (String, z3_drops);
 
 // this main function is just for debug
 // this runs the tokenizer and prints all tokens
-// like:
-// TOKEN: ~  7             TOKEN_KEY 'package'
-// The tokenizer does not allocate any memory,
-// neither it modifies its input text, it just
-// returns a token with start position and length info (slice)
-// therefore it does not need any malloc nor free
-int main (int argc, char** argv) {
-  IGNORE_UNUSED (char* _this_file = popf (argc, argv));
-  char* filepath = popf (argc, argv);
-  char* hmmm = argv[0];
+i32 main (i32 argc, c8** argv) {
+  IGNORE_UNUSED (nstr _this_file = popf (argc, argv));
+  nstr filepath = popf (argc, argv);
+  nstr hmmm = argv[0];
 
   if (hmmm) {
     YamlStore store;
-    int file_fd = fd_open_file (filepath);
+    i32 file_fd = fd_open_file (filepath);
 
-    store.strs = z3_vec (String);
-    store.bigs = z3_vec (String);
+    store.str_pools = z3_vec (String);
+    store.owned_strs = z3_vec (String);
 
-    z3_vec_init_capacity (store.strs, 4);
-    z3_vec_init_capacity (store.bigs, 4);
+    z3_vec_init_capacity (store.str_pools, 4);
+    z3_vec_init_capacity (store.owned_strs, 4);
 
     String fst = z3_str (STR_ALLOC_SIZE_BASE);
     z3_pushl (&fst, filepath, strlen (filepath));
     z3_pushc (&fst, 0);
-    z3_push (store.strs, fst);
+    z3_push (store.str_pools, fst);
 
     // NOLINTNEXTLINE (concurrency-mt-unsafe)
     if (file_fd < 0) die ("could not open file %s: %s\n", filepath, strerror (errno));
 
-    char yaml_chunk[YAML_CHUNK_SIZE];
+    u8 yaml_chunk[YAML_CHUNK_SIZE];
 
     YamlParser yp = {0};
     yp.store = &store;
@@ -1125,12 +1169,12 @@ int main (int argc, char** argv) {
     if (eof_reached (&yp)) die ("File is empty");
     while (!eof_reached (&yp)) {
       Token token = next_token (&yp);
-      PRINT_TOKEN (token);
+      print_token (token);
       if (token.kind == TOKEN_UNKNOWN) break;
       if (token.kind == TOKEN_EOF) break;
     }
-    z3_vec_drop_String (&store.strs);
-    z3_vec_drop_String (&store.bigs);
+    z3_vec_drop_String (&store.str_pools);
+    z3_vec_drop_String (&store.owned_strs);
     z3_drop_vec (yp.aliases);
     printf ("\n");
   }
@@ -1144,13 +1188,13 @@ int main (int argc, char** argv) {
   }
 
 #define z3__display_String(s) printf ("%s", (s)->chr)
-  z3_vec_dbg (stores.strs);
-  z3_vec_show (stores.bigs, String);
+  z3_vec_dbg (stores.str_pools);
+  z3_vec_show (stores.owned_strs, String);
 
-  for (size_t i = 0; i < stores.strs.len; i++) {
-    String* strs = z3_get (stores.strs, i);
+  for (usize i = 0; i < stores.str_pools.len; i++) {
+    String* strs = z3_get (stores.str_pools, i);
     printf ("Hex dump of String(%zu)\n\n", strs->len);
-    hex_dump ((unsigned char*)strs->chr, strs->len);
+    hex_dump (strs->chr, strs->len);
   }
 
   if (root->kind == NODE_MAP)
@@ -1163,8 +1207,8 @@ int main (int argc, char** argv) {
     );
 
   free_yaml (root);
-  z3_vec_drop_String (&stores.strs);
-  z3_vec_drop_String (&stores.bigs);
+  z3_vec_drop_String (&stores.str_pools);
+  z3_vec_drop_String (&stores.owned_strs);
 
   return 0;
 }

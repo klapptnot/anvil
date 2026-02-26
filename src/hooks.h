@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <notrust.h>
 #include <stdint.h>
 #include <z3_string.h>
 #include <z3_toys.h>
@@ -36,9 +37,9 @@ typedef struct {
 
 // linked list of collitions
 typedef struct {
-  uintptr_t val;   // points to the value
-  uintptr_t next;  // next item
-  bool leaf;       // if there is a next item
+  usize val;   // points to the value
+  usize next;  // next item
+  bool leaf;   // if there is a next item
 } CollidedItem;
 
 // Load all hooks from folder and config

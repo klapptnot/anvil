@@ -2,6 +2,7 @@
 // Copyright (c) 2025-present Klapptnot
 
 #pragma once
+#include <notrust.h>
 #include <stddef.h>
 #include <z3_hashmap.h>
 
@@ -11,58 +12,58 @@
 #define DEFAULT_TARGET_PATH "#{AWD}/target"
 
 typedef struct {
-  const char* validation;
-  const char* cache_policy;
-  const char** command;
-  size_t command_len;
+  cstr validation;
+  cstr cache_policy;
+  const u8** command;
+  usize command_len;
 } ArgumentConfig;
 
 typedef struct {
-  const char* name;
-  const char* type;
-  const char* repo;
-  const char* path;
+  cstr name;
+  cstr type;
+  cstr repo;
+  cstr path;
 } DependencyConfig;
 
 typedef struct {
-  const char* compiler;
-  const char* cstd;
-  size_t jobs;
+  cstr compiler;
+  cstr cstd;
+  usize jobs;
   HashMap* macros;
   HashMap* arguments;
   DependencyConfig* deps;
-  size_t deps_count;
+  usize deps_count;
 } BuildConfig;
 
 typedef struct {
-  const char* libs;
-  const char* build;
+  cstr libs;
+  cstr build;
 } WorkspaceConfig;
 
 typedef struct {
-  const char** flags;
-  size_t flags_count;
+  const u8** flags;
+  usize flags_count;
 } ProfileConfig;
 
 typedef struct {
-  const char* name;
-  const char* type;
-  const char* main;
-  const char** target;
+  cstr name;
+  cstr type;
+  cstr main;
+  const u8** target;
   // HashMap* macros; // TODO
-  size_t target_count;
+  usize target_count;
 } TargetConfig;
 
 typedef struct {
-  size_t count;
+  usize count;
   TargetConfig** target;
 } BuildTarget;
 
 typedef struct {
-  const char* package;
-  const char* version;
-  const char* author;
-  const char* description;
+  cstr package;
+  cstr version;
+  cstr author;
+  cstr description;
   WorkspaceConfig* workspace;
   BuildTarget* targets;
   BuildConfig* build;

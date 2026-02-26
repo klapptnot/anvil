@@ -30,7 +30,7 @@ targets: [
     type: 'exec',
     main: '#{AWD}/src/yaml.c',
     macros: {
-      _YAML_TEST: '1'
+      TEST_YAML_PARSER: '1'
     },
     for: [
       'x86_64-linux-gnu',

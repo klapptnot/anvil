@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2025-present Klapptnot
 
-#include <stddef.h>
+#include <notrust.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #define Z3_TOYS_SCOPED
 #define Z3_TOYS_IMPL
@@ -25,9 +24,9 @@ String float_to_str (float num);
 
 // z3_dropfn (String, z3_drops);
 
-// static bool fill (String* s, void* ctx, const char* path, size_t /*unused*/) {
+// static bool fill (String* s, void* ctx, const char* path, usize /*unused*/) {
 //   Vector* any = ctx;
-//   size_t i = (size_t)strtol (path, nullptr, 10);  // NOLINT(readability-magic-numbers)
+//   usize i = (usize)strtol (path, nullptr, 10);  // NOLINT(readability-magic-numbers)
 //   if (i > any->len) return false;
 //   String* as = z3_get (*any, i);
 //   z3_pushl (s, as->chr, as->len);
@@ -63,13 +62,13 @@ static void print_anvil_config (const AnvilConfig* config) {
   // Targets
   printf ("\n-- Targets -- %zu\n", config->targets->count);
   if (config->targets) {
-    for (size_t i = 0; i < config->targets->count; i++) {
+    for (usize i = 0; i < config->targets->count; i++) {
       TargetConfig* tgt = config->targets->target[i];
       printf ("Target %zu:\n", i);
       printf ("  Name: %s\n", tgt->name);
       printf ("  Type: %s\n", tgt->type);
       printf ("  Main: %s\n", tgt->main);
-      for (size_t j = 0; j < tgt->target_count; j++) {
+      for (usize j = 0; j < tgt->target_count; j++) {
         printf ("    for[%zu]: %s\n", j, tgt->target[j]);
       }
     }
@@ -102,9 +101,9 @@ static void print_anvil_config (const AnvilConfig* config) {
       ArgumentConfig* args = it.val;
       printf ("    validation   = %s\n", args->validation);
       printf ("    cache_policy = %s\n", args->cache_policy);
-      for (size_t i = 0; i < args->command_len; i++) {
-        size_t len = strlen (args->command[i]);
-        z3_pushl (&command_line, args->command[i], len);
+      for (usize i = 0; i < args->command_len; i++) {
+        usize len = strlen ((nstr)args->command[i]);
+        z3_pushl (&command_line, (nstr)args->command[i], len);
         if (i < args->command_len - 1) z3_pushc (&command_line, ' ');
       }
       printf ("    :~> %s\n", command_line.chr);
@@ -112,7 +111,7 @@ static void print_anvil_config (const AnvilConfig* config) {
   }
 
   printf ("Dependencies:\n");
-  for (size_t i = 0; i < config->build->deps_count; i++) {
+  for (usize i = 0; i < config->build->deps_count; i++) {
     DependencyConfig dep = config->build->deps[i];
     printf ("  Dependency %zu:\n", i);
     printf ("    Name: %s\n", dep.name);
@@ -129,7 +128,7 @@ static void print_anvil_config (const AnvilConfig* config) {
     while (z3_hashmap_iter_next (&it)) {
       Vector* profc = it.val;
       printf ("  %s (%zu):\n", it.key, profc->len);
-      for (size_t i = 0; i < profc->len; i++) {
+      for (usize i = 0; i < profc->len; i++) {
         printf ("      [%zu] %s\n", i, *(char**)z3_get (*profc, i));
       }
     }
@@ -155,8 +154,8 @@ int main (int argc, char** argv) {
   print_anvil_config (config);
   free_anvil_config (config);
   free_yaml (root);
-  z3_vec_drop_String (&store.strs);
-  z3_vec_drop_String (&store.bigs);
+  z3_vec_drop_String (&store.str_pools);
+  z3_vec_drop_String (&store.owned_strs);
 
   return 0;
 }

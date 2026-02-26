@@ -3,6 +3,7 @@
 
 #include "config.h"
 
+#include <notrust.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,7 @@
 #include <yaml.h>
 #include <z3_hashmap.h>
 #include <z3_vector.h>
+#include "z3_toys.h"
 
 void dset_argument_config (ArgumentConfig* acon, Node* node) {
   if (!node || node->kind != NODE_MAP) return;
@@ -24,7 +26,7 @@ void dset_argument_config (ArgumentConfig* acon, Node* node) {
   Node* cmds = map_get_node (node, "command");
   if (cmds && cmds->kind == NODE_LIST) {
     acon->command_len = cmds->list.size;
-    acon->command = (const char**)malloc (sizeof (char*) * acon->command_len);
+    acon->command = (const u8**)malloc (sizeof (char*) * acon->command_len);
     for (size_t i = 0; i < acon->command_len; i++) {
       Node* item = cmds->list.items[i];
       acon->command[i] = (item && item->kind == NODE_STRING) ? item->string : nullptr;
@@ -58,14 +60,14 @@ void dset_workspace_config (WorkspaceConfig* wconf, Node* node) {
   if (wlibs && wlibs->kind == NODE_STRING) {
     wconf->libs = wlibs->string;
   } else {
-    wconf->libs = DEFAULT_LIBS_PATH;
+    wconf->libs = (cstr)DEFAULT_LIBS_PATH;
   }
 
   Node* wtarget = map_get_node (node, "build");
   if (wtarget && wtarget->kind == NODE_STRING) {
     wconf->build = wtarget->string;
   } else {
-    wconf->build = DEFAULT_TARGET_PATH;
+    wconf->build = (cstr)DEFAULT_TARGET_PATH;
   }
 }
 
@@ -73,14 +75,14 @@ void dset_profile_config (HashMap* pconf, Node* node) {
   if (!node || node->kind != NODE_MAP) return;
 
   for (size_t i = 0; i < node->map.size; ++i) {
-    const char* key = node->map.entries[i].key;
+    cstr key = node->map.entries[i].key;
     Node* val = node->map.entries[i].val;
 
     if (!key || !val || val->kind != NODE_LIST) continue;
 
-    Vector* flags = calloc (1, sizeof(Vector));
-    flags->esz = sizeof(char*);
-    z3_vec_init_capacity(*flags, 16);
+    Vector* flags = calloc (1, sizeof (Vector));
+    flags->esz = sizeof (char*);
+    z3_vec_init_capacity (*flags, 16);
     for (size_t j = 0; j < val->list.size; j++) {
       Node* vi = val->list.items[j];
       if (vi && vi->kind == NODE_STRING) {
@@ -88,7 +90,7 @@ void dset_profile_config (HashMap* pconf, Node* node) {
       }
     }
 
-    z3_hashmap_put (pconf, key, flags);
+    z3_hashmap_put (pconf, (nstr)key, flags);
   }
 }
 
@@ -117,7 +119,7 @@ void dset_target_config (BuildTarget* tconf, Node* node) {
     tnode = map_get_node (tnode, "for");
     if (tnode && tnode->kind == NODE_LIST) {
       tari->target_count = tnode->list.size;
-      tari->target = (const char**)malloc (sizeof (char*) * tnode->list.size);
+      tari->target = (const u8**)malloc (sizeof (char*) * tnode->list.size);
       for (size_t j = 0; j < tnode->list.size; ++j) {
         Node* elem = tnode->list.items[j];
         tari->target[j] = (elem && elem->kind == NODE_STRING) ? elem->string : nullptr;
@@ -145,10 +147,10 @@ void dset_build_config (BuildConfig* bconf, Node* node) {
   if (macros && macros->kind == NODE_MAP) {
     bconf->macros = z3_hashmap_create ();
     for (size_t i = 0; i < macros->map.size; ++i) {
-      const char* key = macros->map.entries[i].key;
+      cstr key = macros->map.entries[i].key;
       Node* val = macros->map.entries[i].val;
       if (key && val && val->kind == NODE_STRING) {
-        z3_hashmap_put (bconf->macros, key, val->string);
+        z3_hashmap_put (bconf->macros, (nstr)key, KILL_CAST_QUAL ((void*)val->string));
       }
     }
   }
@@ -158,12 +160,12 @@ void dset_build_config (BuildConfig* bconf, Node* node) {
   if (args && args->kind == NODE_MAP) {
     bconf->arguments = z3_hashmap_create ();
     for (size_t i = 0; i < args->map.size; ++i) {
-      const char* key = args->map.entries[i].key;
+      cstr key = args->map.entries[i].key;
       Node* val = args->map.entries[i].val;
       if (key && val && val->kind == NODE_MAP) {
         ArgumentConfig* argconf = malloc (sizeof (ArgumentConfig));
         dset_argument_config (argconf, val);
-        z3_hashmap_put (bconf->arguments, key, (void*)argconf);
+        z3_hashmap_put (bconf->arguments, (nstr)key, (void*)argconf);
       }
     }
   }

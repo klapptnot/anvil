@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2025-present Klapptnot
 
-#include <stddef.h>
+#include <notrust.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,11 +12,11 @@
 #include <z3_vector.h>
 
 #define LINE_BUFFER_CLAMP(x) ((x) > MAX_ERROR_LINE_LENGTH ? MAX_ERROR_LINE_LENGTH : (x))
-#define COPY_LINE(buf, off, len)         \
-  {                                      \
-    size_t _l = LINE_BUFFER_CLAMP (len); \
-    memcpy (buf, input + off, _l);       \
-    buf[_l] = '\0';                      \
+#define COPY_LINE(buf, off, len)        \
+  {                                     \
+    usize _l = LINE_BUFFER_CLAMP (len); \
+    memcpy (buf, input + off, _l);      \
+    buf[_l] = '\0';                     \
   }
 
 static const char* yaml_error_to_string (YamlErrorKind error) {
@@ -48,14 +48,14 @@ static const char* yaml_error_to_string (YamlErrorKind error) {
   }
 }
 
-static bool parser_filler (String* res, void* ctx, char* item, size_t len) {
+static bool parser_filler (String* res, void* ctx, cstr item, usize len) {
   YamlError* ctxs = (YamlError*)ctx;
 
   switch (ctxs->kind) {
     case TAB_INDENTATION:
       return false;
     case UNEXPECTED_TOKEN:
-      if (strncmp (item, "exp", 3 > len ? len : 3) == 0)
+      if (strncmp ((nstr)item, "exp", 3 > len ? len : 3) == 0)
         z3_pushl (res, ctxs->exp, strlen (ctxs->exp));
       else
         z3_pushl (res, ctxs->got, strlen (ctxs->got));
@@ -71,7 +71,7 @@ static bool parser_filler (String* res, void* ctx, char* item, size_t len) {
     case MISSING_COMMA:
       return true;
     case UNCLOSED_QUOTE:
-      if (strncmp (item, "exp", 3 > len ? len : 3) == 0)
+      if (strncmp ((nstr)item, "exp", 3 > len ? len : 3) == 0)
         z3_pushl (res, ctxs->exp, strlen (ctxs->exp));
       else
         z3_pushl (res, ctxs->got, strlen (ctxs->got));
@@ -99,9 +99,9 @@ static void parser_error (YamlParser* yp, YamlError error) {
     "Key exceeds length limit, may not surpass 255 chars"
   };
 
-  String* filename = z3_get(yp->store->strs, 0);
+  String* filename = z3_get (yp->store->str_pools, 0);
 
-  ScopedString err_msg = z3_strcpy (yaml_error_messages[error.kind]);
+  ScopedString err_msg = z3_strcpy ((cstr)yaml_error_messages[error.kind]);
   ScopedString ferr_msg = z3_interp (&err_msg, parser_filler, &error);
 
   eprintf ("YamlError::%s\n", yaml_error_to_string (error.kind));

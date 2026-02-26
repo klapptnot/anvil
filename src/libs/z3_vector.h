@@ -19,19 +19,18 @@
  */
 #pragma once
 
+#include <notrust.h>
 #include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
 #include <z3_toys.h>
 
 #define Z3_VECTOR_INITIAL_CAPACITY 16
 
 //~ Dynamic array structure with automatic resizing
 typedef struct {
-  size_t max;  // total capacity (how many items I *could* store)
-  size_t len;  // current length (how many items I *am* storing)
-  size_t esz;  // size of each item
-  void* val;   // void pointer to the actual data
+  usize max;  // total capacity (how many items I *could* store)
+  usize len;  // current length (how many items I *am* storing)
+  usize esz;  // size of each item
+  void* val;  // void pointer to the actual data
 } Vector;
 
 //~ Initialize a new dynamic array for a specific type
@@ -55,7 +54,7 @@ typedef struct {
 #define z3_vec_show(vec, type)                                                               \
   {                                                                                          \
     printf (#vec " = Vector {\n  len: %zu,\n  max: %zu,\n  val: [\n", (vec).len, (vec).max); \
-    for (size_t i = 0; i < (vec).len; i++) {                                                 \
+    for (usize i = 0; i < (vec).len; i++) {                                                  \
       printf ("    %-4zu -> ", i);                                                           \
       z3__display_##type ((type*)z3_get (vec, i));                                           \
       putchar ('\n');                                                                        \
@@ -67,7 +66,7 @@ typedef struct {
 #define z3_vec_dbg(vec)                                                            \
   {                                                                                \
     printf (#vec " = Vector {\n  len: %zu,\n  max: %zu,\n", (vec).len, (vec).max); \
-    for (size_t i = 0; i < (vec).len; i++) {                                       \
+    for (usize i = 0; i < (vec).len; i++) {                                        \
       printf ("  [%zu] = %p,\n", i, z3_get (vec, i));                              \
     }                                                                              \
     printf ("}\n");                                                                \
@@ -97,12 +96,12 @@ typedef struct {
   }
 
 //~ Free all elements in a dynamic array using a custom free function
-#define z3_drain(vec, type, drop_fn)         \
-  {                                          \
-    for (size_t i = 0; i < (vec).len; i++) { \
-      drop_fn (((type*)(vec).val)[i]);       \
-    }                                        \
-    z3_drop_vec (vec);                       \
+#define z3_drain(vec, type, drop_fn)        \
+  {                                         \
+    for (usize i = 0; i < (vec).len; i++) { \
+      drop_fn (((type*)(vec).val)[i]);      \
+    }                                       \
+    z3_drop_vec (vec);                      \
   }
 
 //~ Cleanup function for generic Vector (used with attribute cleanup)
@@ -111,7 +110,7 @@ void z3_vec_drop (Vector* vec);
 //~ Define a cleanup function for a specific Vector type
 #define z3_vec_drop_fn(TYPE, FUNC)                                                        \
   static inline void z3_vec_drop_##TYPE (Vector* vec) {                                   \
-    for (size_t i = 0; i < vec->len; i++) {                                               \
+    for (usize i = 0; i < vec->len; i++) {                                                \
       /* NOLINTNEXTLINE (cast-align) */                                                   \
       _Pragma ("GCC diagnostic push") _Pragma ("GCC diagnostic ignored \"-Wcast-align\"") \
         FUNC ((TYPE*)((char*)vec->val + ((i) * vec->esz)));                               \
@@ -132,6 +131,7 @@ void z3_vec_drop (Vector* vec);
 #define ScopedVector __attribute__ ((cleanup (z3_vec_drop))) Vector
 
 #ifdef Z3_VECTOR_IMPL
+#include <stdlib.h>
 
 //~ Cleanup function for generic Vector (used with attribute cleanup)
 inline void z3_vec_drop (Vector* vec) {

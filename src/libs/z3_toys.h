@@ -24,26 +24,23 @@
 #error This code must be compiled with -std=c23
 #endif
 
-#include <stddef.h>
-#include <stdint.h>
+#include <notrust.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #if defined(__GNUC__) || defined(__clang__)
-#define IGNORE_UNUSED(declaration)                                                \
+#define IGNORE_UNUSED(decl)                                                       \
   _Pragma ("GCC diagnostic push") _Pragma ("GCC diagnostic ignored \"-Wunused\"") \
-    _Pragma ("GCC diagnostic ignored \"-Wunused-result\"")                        \
-      declaration _Pragma ("GCC diagnostic pop")
+    _Pragma ("GCC diagnostic ignored \"-Wunused-result\"") decl _Pragma ("GCC diagnostic pop")
 
 // I enable **all** warnings, I want to pick which one to silence
 // but still get them
-#define IGNORE_WARNING(declaration)                                            \
-  _Pragma ("GCC diagnostic push") _Pragma ("GCC diagnostic ignored \"-Wall\"") \
-    declaration _Pragma ("GCC diagnostic pop")
+#define KILL_CAST_QUAL(decl)                                                         \
+  _Pragma ("GCC diagnostic push") _Pragma ("GCC diagnostic ignored \"-Wcast-qual\"") \
+    decl _Pragma ("GCC diagnostic pop")
 #else
-#define IGNORE_UNUSED(declaration)  declaration
-#define IGNORE_WARNING(declaration) declaration
+#define IGNORE_UNUSED(decl)  decl
+#define KILL_CAST_QUAL(decl) decl
 #endif
 
 //~ Print formatted error message to stderr with red coloring
@@ -79,13 +76,13 @@
   }
 
 //~ Calculate the next power of 2 greater than or equal to n
-size_t next_power_of2 (size_t n);
+usize next_power_of2 (usize n);
 
 #ifdef Z3_TOYS_IMPL
 // Implementation of utility functions
 
 //~ Calculate the next power of 2 greater than or equal to n
-size_t next_power_of2 (size_t n) {
+usize next_power_of2 (usize n) {
   n--;
   n |= n >> 1;
   n |= n >> 2;

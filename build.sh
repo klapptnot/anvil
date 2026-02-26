@@ -17,7 +17,6 @@ function clang_check {
 
   # Extract CompileFlags -> Add from the YAML
   if [[ -f "${clangd_cfg}" ]]; then
-    local in_add=0
     mapfile -t flags < <(yq -rM '.CompileFlags.Add[]' "${clangd_cfg}")
   else
     echo "💢 Config not found at ${clangd_cfg}" >&2
@@ -106,10 +105,11 @@ function main {
     "-Wextra"
     "-pedantic"
     "-ggdb"
-    "-O1"
+    "-O0"
   )
 
-  read -r targets < <(yq '.targets[] | .name' "${ANVIL_YAML}" | tr '\n' ' ')
+  # read -r targets < <(yq '.targets[] | .name' "${ANVIL_YAML}" | tr '\n' ' ')
+  targets="'anvil' 'yaml'"
 
   barg::parse "${@}" << EOF
   #[always]
