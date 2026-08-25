@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 
-include barg.sh
+source barg.sh
 
 read -r THIS_SCRIPT < <(realpath -- "${0}")
 read -r THIS_NAME < <(basename -- "${THIS_SCRIPT}")
@@ -135,7 +135,7 @@ EOF
   mapfile -t c_flags < <(yq -r '.profiles.release[]' anvil.yaml)
   read -r libs_parent < <(yq -r '.workspace.libs' anvil.yaml)
   local libs_parent="${libs_parent/#\#\{AWD\}/${THIS_PARENT}}"
-  local target=$(yq -r ".targets[] | select (.name == \"${BUILD_TARGET}\")" anvil.yaml)
+  local target=$(yq -o json ".targets[] | select (.name == \"${BUILD_TARGET}\")" anvil.yaml)
 
   read -r target_main < <(jq -r .main <<< "${target}")
   mapfile -t target_macros < <(jq -r '.macros | to_entries[] | "-D\(.key)=\(.value | @sh)"' <<< "${target}")

@@ -48,18 +48,18 @@ static const char* yaml_error_to_string (YamlErrorKind error) {
   }
 }
 
-static bool parser_filler (String* res, void* ctx, cstr item, usize len) {
+static bool parser_filler (String* res, const StringSlice *item, void* ctx) {
   YamlError* ctxs = (YamlError*)ctx;
 
   switch (ctxs->kind) {
     case TAB_INDENTATION:
-      return false;
+      return true;
     case UNEXPECTED_TOKEN:
-      if (strncmp ((nstr)item, "exp", 3 > len ? len : 3) == 0)
+      if (strncmp ((nstr)item->chr, "exp", 3 > item->len ? item->len : 3) == 0)
         z3_pushl (res, ctxs->exp, strlen (ctxs->exp));
       else
         z3_pushl (res, ctxs->got, strlen (ctxs->got));
-      return true;
+      return false;
     case WRONG_SYNTAX:
     case KEY_REDEFINITION:
     case UNDEFINED_ALIAS:
@@ -67,18 +67,18 @@ static bool parser_filler (String* res, void* ctx, cstr item, usize len) {
     case MISSING_VALUE:
       // key or alias name, or token found
       z3_pushl (res, ctxs->got, strlen (ctxs->got));
-      return true;
+      return false;
     case MISSING_COMMA:
-      return true;
+      return false;
     case UNCLOSED_QUOTE:
-      if (strncmp ((nstr)item, "exp", 3 > len ? len : 3) == 0)
+      if (strncmp ((nstr)item->chr, "exp", 3 > item->len ? item->len : 3) == 0)
         z3_pushl (res, ctxs->exp, strlen (ctxs->exp));
       else
         z3_pushl (res, ctxs->got, strlen (ctxs->got));
-      return true;
+      return false;
     default:
       z3_pushlit (res, "Unknown error occurred.");
-      return true;
+      return false;
   }
 }
 
@@ -102,11 +102,11 @@ static void parser_error (YamlParser* yp, YamlError error) {
   String* filename = z3_get (yp->store->str_pools, 0);
 
   ScopedString err_msg = z3_strcpy ((cstr)yaml_error_messages[error.kind]);
-  ScopedString ferr_msg = z3_interp (&err_msg, parser_filler, &error);
+  ScopedString ferr_msg = z3_interp (&err_msg, &parser_filler, &error);
 
   eprintf ("YamlError::%s\n", yaml_error_to_string (error.kind));
   eprintf ("%s:%hu:%hu -> %s\n", filename->chr, yp->line, yp->lpos, ferr_msg.chr);
 
-  fflush (stderr);  // NOLINT (cert-err33-c)
+  (void)fflush (stderr);
   _exit (EXIT_FAILURE);
 }

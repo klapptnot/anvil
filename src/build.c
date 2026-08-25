@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2025-present Klapptnot
 
-#include "build.h"
-
 #include <ctype.h>
 #include <errno.h>
 #include <notrust.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <z3_string.h>
 #include <z3_toys.h>
 #include <z3_vector.h>
+#include <build.h>
 
 bool target_needs_rebuild (String* target, Vector deps) {
   struct stat target_stat;
@@ -31,7 +31,7 @@ bool target_needs_rebuild (String* target, Vector deps) {
 
     if (stat ((nstr)dep->chr, &dep_stat) != 0) {
       die (
-        "Dependency '%s' for target '%s' doesn't exist or can't be accessed: %s\n",
+        "Dependency '%s' for target '%s' doesn't exist or can't be accessed: %s",
         dep->chr,
         target->chr,
         strerror (errno) // NOLINT(concurrency-mt-unsafe) we are dying- girl
@@ -69,7 +69,7 @@ void parse_dependencies (String* rule_str, Vector* deps) {
       String s = z3_str (len);
 
       z3_pushl (&s, (nstr)&rule_str->chr[start], len);
-      z3_push (*deps, s);
+      z3_push (deps, &s);
     }
   }
 }

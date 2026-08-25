@@ -3,7 +3,6 @@
 
 #include <notrust.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #define Z3_TOYS_SCOPED
@@ -39,8 +38,6 @@ String float_to_str (float num);
     printf ("{l: %2zu, m: %2zu} \"%s\"", s.len, s.max, s.chr); \
     z3_drops (&s);                                             \
   }
-
-z3_vec_drop_fn (String, z3_drops);
 
 static void print_anvil_config (const AnvilConfig* config) {
   if (!config) {
@@ -80,7 +77,7 @@ static void print_anvil_config (const AnvilConfig* config) {
   printf ("\n-- Build --\n");
   printf ("Compiler   = %s\n", config->build->compiler);
   printf ("C Standard = %s\n", config->build->cstd);
-  printf ("Jobs       = %zu\n", config->build->jobs);
+  printf ("Jobs       = %d\n", config->build->jobs);
 
   printf ("Macros:\n");
   if (config->build->macros) {
@@ -99,8 +96,8 @@ static void print_anvil_config (const AnvilConfig* config) {
     while (z3_hashmap_iter_next (&it)) {
       printf ("  %s\n", it.key);
       ArgumentConfig* args = it.val;
-      printf ("    validation   = %s\n", args->validation);
-      printf ("    cache_policy = %s\n", args->cache_policy);
+      printf ("    validation   = %d\n", args->validation);
+      printf ("    cache_policy = %d\n", args->cache_policy);
       for (usize i = 0; i < args->command_len; i++) {
         usize len = strlen ((nstr)args->command[i]);
         z3_pushl (&command_line, (nstr)args->command[i], len);
@@ -129,7 +126,7 @@ static void print_anvil_config (const AnvilConfig* config) {
       Vector* profc = it.val;
       printf ("  %s (%zu):\n", it.key, profc->len);
       for (usize i = 0; i < profc->len; i++) {
-        printf ("      [%zu] %s\n", i, *(char**)z3_get (*profc, i));
+        printf ("      [%zu] %s\n", i, (char*)z3_get (*profc, i));
       }
     }
   }
@@ -138,8 +135,10 @@ static void print_anvil_config (const AnvilConfig* config) {
 }
 
 int main (int argc, char** argv) {
-  IGNORE_UNUSED (char* _this_file = popf (argc, argv));  // NOLINT (concurrency-mt-unsafe)
-  char* file_name = popf (argc, argv);                   // NOLINT (concurrency-mt-unsafe)
+  // u8* file = __anvil_hook ("load-bytes", "hooks/load-bytes");
+  // printf ("# load-bytes\n%s", file);
+  (void)popf (argc, argv);  // NOLINT(concurrency-mt-unsafe)
+  char* file_name = popf (argc, argv);   // NOLINT(concurrency-mt-unsafe)
 
   YamlStore store;
   Node* root = parse_yaml (file_name, &store);
@@ -149,13 +148,12 @@ int main (int argc, char** argv) {
     return 1;
   }
 
-  AnvilConfig* config = malloc (sizeof (AnvilConfig));
-  dset_anvil_config (config, root);
+  AnvilConfig* config = dset_anvil_config (root);
   print_anvil_config (config);
   free_anvil_config (config);
   free_yaml (root);
-  z3_vec_drop_String (&store.str_pools);
-  z3_vec_drop_String (&store.owned_strs);
+  z3_vec_drain (&store.str_pools, (void(*)(void*))z3_drops);
+  z3_vec_drain (&store.owned_strs, (void(*)(void*))z3_drops);
 
   return 0;
 }

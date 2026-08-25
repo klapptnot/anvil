@@ -11,36 +11,11 @@
 
 #include "config.h"
 
-typedef enum {
-  VALIDATE_STR_OFF,
-  VALIDATE_STR_COMPACT,
-  VALIDATE_STR_CONTENT,
-  VALIDATE_STR_STRICT
-} ValidateStr;
-
-typedef enum {
-  CACHE_POLICY_NEVER,
-  CACHE_POLICY_MEMOIZE,
-  CACHE_POLICY_ALWAYS
-} CachePolicy;
-
 typedef struct {
-  String name;
   ValidateStr valid;
   CachePolicy cache;
+  cstr* command;
 } RuntimeHook;
-
-typedef struct {
-  RuntimeHook* value;
-  Vector* chest;
-} HashItem;
-
-// linked list of collitions
-typedef struct {
-  usize val;   // points to the value
-  usize next;  // next item
-  bool leaf;   // if there is a next item
-} CollidedItem;
 
 // Load all hooks from folder and config
 Vector hooks_get_list (AnvilConfig config);
@@ -64,4 +39,4 @@ bool hooks_validate (String name);
 void hooks_drop_cache (String name);
 
 // Clear the entire list of hooks (resets all hooks).
-void hooks_clear_list (void);
+void hooks_clear_list (Vector hooks);

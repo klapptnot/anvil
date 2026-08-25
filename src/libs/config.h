@@ -11,10 +11,24 @@
 #define DEFAULT_LIBS_PATH   "#{AWD}/src/libs"
 #define DEFAULT_TARGET_PATH "#{AWD}/target"
 
+typedef enum {
+  VALIDATE_NONE,
+  VALIDATE_STATUS,
+  VALIDATE_CONTENT,
+  VALIDATE_ALL
+} ValidateStr;
+
+typedef enum {
+  CACHE_POLICY_NEVER,
+  CACHE_POLICY_MEMOIZE,
+  CACHE_POLICY_ALWAYS
+} CachePolicy;
+
 typedef struct {
-  cstr validation;
-  cstr cache_policy;
-  const u8** command;
+  ValidateStr validation;
+  CachePolicy cache_policy;
+  ustr cached;
+  cstr* command;
   usize command_len;
 } ArgumentConfig;
 
@@ -28,11 +42,11 @@ typedef struct {
 typedef struct {
   cstr compiler;
   cstr cstd;
-  usize jobs;
   HashMap* macros;
   HashMap* arguments;
   DependencyConfig* deps;
-  usize deps_count;
+  u32 deps_count;
+  u32 jobs;
 } BuildConfig;
 
 typedef struct {
@@ -41,7 +55,7 @@ typedef struct {
 } WorkspaceConfig;
 
 typedef struct {
-  const u8** flags;
+  cstr* flags;
   usize flags_count;
 } ProfileConfig;
 
@@ -49,7 +63,7 @@ typedef struct {
   cstr name;
   cstr type;
   cstr main;
-  const u8** target;
+  cstr* target;
   // HashMap* macros; // TODO
   usize target_count;
 } TargetConfig;
@@ -70,6 +84,9 @@ typedef struct {
   HashMap* profiles;
 } AnvilConfig;
 
+// Sets up an AnvilConfig structure based on the provided YAML node.
+AnvilConfig* dset_anvil_config (Node* node);
+
 // Sets up an ArgumentConfig structure based on the provided YAML node.
 void dset_argument_config (ArgumentConfig* acon, Node* node);
 
@@ -87,9 +104,6 @@ void dset_target_config (BuildTarget* tconf, Node* node);
 
 // Sets up a BuildConfig structure based on the provided YAML node.
 void dset_build_config (BuildConfig* bconf, Node* node);
-
-// Sets up an AnvilConfig structure based on the provided YAML node.
-void dset_anvil_config (AnvilConfig* conf, Node* node);
 
 void free_profile_config (HashMap* pconf);
 void free_target_config (BuildTarget* tconf);

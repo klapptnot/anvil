@@ -3,7 +3,7 @@ Language: Cpp
 BasedOnStyle: Google
 IndentWidth: 2
 ContinuationIndentWidth: 2
-ColumnLimit: 96
+ColumnLimit: 80
 AccessModifierOffset: -4
 AllowShortFunctionsOnASingleLine: Empty
 BreakBeforeBraces: Attach
@@ -51,7 +51,7 @@ AlignConsecutiveShortCaseStatements:
   AlignCaseColons: false
 
 AlignOperands: AlignAfterOperator
-AlignAfterOpenBracket: BlockIndent
+AlignAfterOpenBracket: false
 # Why Google style has this set to true?
 # I don't want to read that style guide,
 # neither the clang-format documentation
@@ -62,7 +62,10 @@ BinPackArguments: false
 BinPackLongBracedList: false
 BinPackParameters: OnePerLine
 BreakAfterAttributes: Leave
-# BreakAfterOpenBracketBracedList: true # clang-format v22
+BreakAfterOpenBracketBracedList: true # clang-format v22
+BreakBeforeCloseBracketBracedList: true
+BreakAfterOpenBracketFunction: true
+BreakBeforeCloseBracketFunction: true
 BreakStringLiterals: true
 
 PackConstructorInitializers: Never

@@ -1,29 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2025-present Klapptnot
+/// @file yaml.h
+/// @brief Minimal YAML parser: lexer tokens, node/value types, and the
+///        public parse/free/lookup API.
+///
+/// Requires C23 (`__STDC_VERSION__ == 202311L`). No dependencies beyond
+/// @c notrust.h and @c z3_vector.h.
 
-/**
- * YAML Loader Definitions
- *
- * This module defines the necessary structures and functions to load and parse YAML data.
- * The YAML data is parsed into a tree-like structure of nodes. Each node represents a piece of
- * the YAML document, which can be a map, sequence, string, number, or boolean. The core parsing
- * mechanism handles tokenization, error reporting, and recursive tree-building to represent
- * complex YAML documents.
- *
- * Key components:
- * - `YamlChar`: Enum of special characters used in YAML syntax.
- * - `TokenKind`: Enum for the types of tokens recognized in YAML documents.
- * - `YamlErrorKind`: Enum for identifying common parsing errors.
- * - `NodeKind`: Enum defining the possible types of YAML nodes.
- * - `Node`: A recursive structure representing the nodes in the parsed YAML tree.
- *
- * Functions provide functionality for:
- * - Tokenizing YAML input.
- * - Parsing YAML maps, sequences, strings, numbers, and booleans.
- * - Error handling with detailed messages for common YAML issues.
- *
- * The end result is a tree of nodes that represents the structured YAML data.
- */
 #pragma once
 
 #ifndef __STDC_VERSION__
@@ -35,172 +18,204 @@
 #include <notrust.h>
 #include <z3_vector.h>
 
-#ifdef _YAML_TEST
-#define Z3_TOYS_IMPL
-#define Z3_STRING_IMPL
-#endif
+/// @def YAML_MAX_NESTING
+/// @brief Max object nesting allowed
+#define YAML_MAX_NESTING 256
 
-#define MAX_NUMBER_LENGTH     64         // string representation, without _, or leading zeros
-#define HEAP_VALUE_MIN_SIZE   8          // small values: keys, booleans
-#define STR_ALLOC_SIZE_BASE   512        // base string length, pools
-#define NODE_INITIAL_CAPACITY 8          // typical YAML node child count
-#define YAML_CHUNK_SIZE       (1 << 12)  // 4 KB (page-aligned I/O)
+/// @def YAML_MAX_NUM_REPR
+/// @brief Max length of a numeric token's value string representation
+#define YAML_MAX_NUM_REPR 64
 
-// Single characters with specific meanings in YAML syntax
+/// @def YAML_INIT_HEAP_SIZE
+/// @brief Minimum heap allocation size for small values (keys, booleans).
+#define YAML_INIT_HEAP_SIZE 8
+
+/// @def YAML_STACK_BUF_LEN
+/// @brief Base allocation size (bytes) for string pools.
+#define YAML_STACK_BUF_LEN 512
+
+/// @def YAML_NODE_INIT_CAP
+/// @brief Initial child capacity for a YAML container node (map/list).
+#define YAML_NODE_INIT_CAP 8
+
+/// @def YAML_CHUNK_SIZE
+/// @brief I/O read chunk size, 4 KB (page-aligned).
+#define YAML_CHUNK_SIZE (1 << 12)
+
+/// @brief Single characters with specific meaning in YAML syntax tokenizer.
 enum YamlChar {
-  CHAR_EOF = '\0',           // Null character marking end of input
-  CHAR_NEWLINE = '\n',       // Line break for separating YAML lines
-  CHAR_SPACE = ' ',          // Space for readability and formatting
-  CHAR_TAB = '\t',           // Tab character (typically invalid in YAML)
-  CHAR_COLON = ':',          // Separator between keys and values
-  CHAR_DOT = '.',            // Decimal point for floating-point numbers
-  CHAR_HASH = '#',           // Marks the start of a comment
-  CHAR_QUOTE_SINGLE = '\'',  // Delimits single-quoted string literals
-  CHAR_QUOTE_DOUBLE = '"',   // Delimits double-quoted strings
-  CHAR_OPEN_BRACKET = '[',   // Starts a sequence/array
-  CHAR_CLOSE_BRACKET = ']',  // Ends a sequence/array
-  CHAR_OPEN_BRACE = '{',     // Starts a mapping/object
-  CHAR_CLOSE_BRACE = '}',    // Ends a mapping/object
-  CHAR_COMMA = ',',          // Separates elements in collections
-  CHAR_AMPERSAND = '&',      // Defines an anchor reference
-  CHAR_ASTERISK = '*',       // References an alias
+  CHAR_EOF = '\0',           ///< Null character marking end of input.
+  CHAR_NEWLINE = '\n',       ///< Line break separating YAML lines.
+  CHAR_SPACE = ' ',          ///< Space, used for indentation/formatting.
+  CHAR_TAB = '\t',           ///< Tab character (typically invalid in YAML).
+  CHAR_COLON = ':',          ///< Separator between keys and values.
+  CHAR_DOT = '.',            ///< Decimal point for floating-point numbers.
+  CHAR_HASH = '#',           ///< Marks the start of a comment.
+  CHAR_QUOTE_SINGLE = '\'',  ///< Delimits single-quoted string literals.
+  CHAR_QUOTE_DOUBLE = '"',   ///< Delimits double-quoted strings.
+  CHAR_OPEN_BRACKET = '[',   ///< Starts a sequence/array.
+  CHAR_CLOSE_BRACKET = ']',  ///< Ends a sequence/array.
+  CHAR_OPEN_BRACE = '{',     ///< Starts a mapping/object.
+  CHAR_CLOSE_BRACE = '}',    ///< Ends a mapping/object.
+  CHAR_COMMA = ',',          ///< Separates elements in collections.
+  CHAR_AMPERSAND = '&',      ///< Defines an anchor reference.
+  CHAR_ASTERISK = '*',       ///< References an alias.
 };
 
-// Enumeration of token types for lexical analysis
-// Helps identify the context and type of parsed tokens
+/// @brief Lexical token kinds produced by the tokenizer.
 typedef enum {
-  TOKEN_UNKNOWN,     // Catch-all for unrecognized tokens
-  TOKEN_KEY,         // Identifies a key in key-value pairs
-  TOKEN_STRING,      // Escaped string token
-  TOKEN_STRING_LIT,  // Literal string token
-  TOKEN_NUMBER,      // Numeric value token
-  TOKEN_BOOLEAN,     // Boolean (true/false) token
-  TOKEN_COMMA,       // Collection element separator
-  TOKEN_ANCHOR,      // Anchor definition token
-  TOKEN_ALIAS,       // Alias reference token
-  TOKEN_OPEN_MAP,    // Start of mapping token
-  TOKEN_CLOSE_MAP,   // End of mapping token
-  TOKEN_OPEN_SEQ,    // Start of sequence token
-  TOKEN_CLOSE_SEQ,   // End of sequence token
-  TOKEN_EOF,         // End of input token
-  TOKEN_INDENT,      //= Container node open
-  TOKEN_DEDENT,      //= Container node close
+  TOKEN_UNKNOWN,     ///< Catch-all for unrecognized tokens.
+  TOKEN_KEY,         ///< A key in a key-value pair.
+  TOKEN_STRING,      ///< Escaped string token.
+  TOKEN_STRING_LIT,  ///< Literal (unescaped) string token.
+  TOKEN_NUMBER,      ///< Numeric value token.
+  TOKEN_BOOLEAN,     ///< Boolean (true/false) token.
+  TOKEN_COMMA,       ///< Collection element separator.
+  TOKEN_ANCHOR,      ///< Anchor definition token.
+  TOKEN_ALIAS,       ///< Alias reference token.
+  TOKEN_OPEN_MAP,    ///< Start of a mapping.
+  TOKEN_CLOSE_MAP,   ///< End of a mapping.
+  TOKEN_OPEN_SEQ,    ///< Start of a sequence.
+  TOKEN_CLOSE_SEQ,   ///< End of a sequence.
+  TOKEN_EOF,         ///< End of input.
+  TOKEN_INDENT,      ///< Container node open (indent increase).
+  TOKEN_DEDENT,      ///< Container node close (indent decrease).
 } TokenKind;
 
-// Enumeration of possible node types in parsed YAML
-// Represents different data structures and primitive types
+/// @brief Node types in a parsed YAML document.
 typedef enum {
-  NODE_MAP,     // Key-value mapping
-  NODE_LIST,    // Ordered list/array
-  NODE_STRING,  // Text string
-  NODE_NUMBER,  // Numeric value
-  NODE_BOOLEAN  // True/false value
+  NODE_MAP,     ///< Key-value mapping.
+  NODE_LIST,    ///< Ordered list/array.
+  NODE_STRING,  ///< Text string.
+  NODE_NUMBER,  ///< Numeric value.
+  NODE_BOOLEAN  ///< True/false value.
 } NodeKind;
 
-// Enumeration of potential parsing errors
-// Helps identify specific issues during YAML parsing
+/// @brief Categories of parsing errors that can occur while reading YAML.
 typedef enum {
-  TAB_INDENTATION,   // Incorrect indentation using tabs
-  UNEXPECTED_TOKEN,  // Token appears where not expected
-  WRONG_SYNTAX,      // General syntax violation
-  KEY_REDEFINITION,  // Duplicate key definition
-  UNDEFINED_ALIAS,   // Reference to undefined anchor
-  REDEFINED_ALIAS,   // Duplicate anchor definition
-  MISSING_VALUE,     // No value provided for a key
-  MISSING_COMMA,     // Missing separator in collections
-  UNCLOSED_QUOTE,    // Missing matching quote for strings
-  NUMBER_TOO_LONG,   // Number exceeds integer representation lenght
-  KEY_TOO_LONG,      // Key exceeds maximum allowed value
+  TAB_INDENTATION,   ///< Incorrect indentation using tabs.
+  UNEXPECTED_TOKEN,  ///< Token appears where not expected.
+  WRONG_SYNTAX,      ///< General syntax violation.
+  KEY_REDEFINITION,  ///< Duplicate key definition.
+  UNDEFINED_ALIAS,   ///< Reference to an undefined anchor.
+  REDEFINED_ALIAS,   ///< Duplicate anchor definition.
+  MISSING_VALUE,     ///< No value provided for a key.
+  MISSING_COMMA,     ///< Missing separator in a collection.
+  UNCLOSED_QUOTE,    ///< Missing matching quote for a string.
+  NUMBER_TOO_LONG,   ///< Number exceeds max integer representation length.
+  KEY_TOO_LONG,      ///< Key exceeds maximum allowed length.
 } YamlErrorKind;
 
-// Structured error information for detailed error reporting
+/// @brief Structured error information for detailed diagnostics.
 typedef struct {
-  u32 _padding;        // hmm
-  YamlErrorKind kind;  // Type of error encountered
-  nstr exp;            // Expected token/context
-  nstr got;            // Actual token/context received
+  u32 _padding;        ///< Unused; reserved for alignment.
+  YamlErrorKind kind;  ///< Type of error encountered.
+  nstr exp;            ///< Expected token/context.
+  nstr got;            ///< Actual token/context received.
 } YamlError;
 
-// Recursive node structure for representing YAML data
+/// @brief A single node in the parsed YAML tree.
+/// The active union member is determined by ::kind.
 typedef struct Node Node;
 
-// List/array representation
+/// @brief A YAML sequence (array) of ::Node pointers.
 typedef struct {
-  usize size;      // Current number of elements
-  usize capacity;  // Allocated capacity
-  Node** items;    // Array of node pointers
+  usize size;      ///< Current number of elements.
+  usize capacity;  ///< Allocated capacity.
+  Node** items;    ///< Array of node pointers.
 } YamlList;
 
-// Map entry with key-value pair
+/// @brief A single key-value entry within a ::YamlMap.
 typedef struct {
-  cstr key;   // Key string
-  Node* val;  // Associated value node
+  cstr key;   ///< Key string.
+  Node* val;  ///< Associated value node.
 } YamlMapEntry;
 
-// Map (object) representation
+/// @brief A YAML mapping (object) of key-value entries.
 typedef struct {
-  usize size;             // Current number of entries
-  usize capacity;         // Allocated capacity
-  YamlMapEntry* entries;  // Array of map entries
+  usize size;             ///< Current number of entries.
+  usize capacity;         ///< Allocated capacity.
+  YamlMapEntry* entries;  ///< Array of map entries.
 } YamlMap;
 
 struct Node {
-  NodeKind kind;        // Type of node
-  unsigned int rcount;  // Reference count (for &name -> *name)
+  NodeKind kind;        ///< Type of node; selects the active union member.
+  unsigned int rcount;  ///< Reference count (for `&name` -> `*name` aliasing).
   union {
-    cstr string;        // String node value
-    f64 number;         // Numeric node value
-    bool boolean;       // Boolean node value
-    YamlList list;      // Sequence node value
-    YamlMap map;        // Map node value
+    cstr string;        ///< Value when kind == NODE_STRING.
+    f64 number;         ///< Value when kind == NODE_NUMBER.
+    bool boolean;       ///< Value when kind == NODE_BOOLEAN.
+    YamlList list;      ///< Value when kind == NODE_LIST.
+    YamlMap map;        ///< Value when kind == NODE_MAP.
   };
 };
 
-// Alias/anchor representation
+/// @brief Binding between an anchor name (`&name`) and its target node.
 typedef struct {
-  cstr name;    // Anchor name
-  Node* value;  // Referenced node
+  cstr name;    ///< Anchor name.
+  Node* value;  ///< Referenced node.
 } YamlAlias;
 
-// List of defined aliases
+/// @brief Collection of all anchors defined while parsing a document.
 typedef struct {
-  YamlAlias* items;  // Array of aliases
-  usize length;      // Number of aliases
+  YamlAlias* items;  ///< Array of aliases.
+  usize length;      ///< Number of aliases.
 } YamlAliasList;
 
-// Token representation with detailed metadata
+/// @brief A single lexical token with metadata pointing to a string pool.
 typedef struct {
-  TokenKind kind;  // Type of token
-  u32 length;      // Token length
-  cstr raw;        // Starting position in input
+  TokenKind kind;  ///< Type of token.
+  u32 length;      ///< Token length, in bytes, from `raw`.
+  cstr raw;        ///< Starting position of the token in the input.
 } Token;
 
+/// @brief Backing storage for all string data produced while parsing.
+///
+/// Owns the string pools and any individually-owned strings so that
+/// ::Node values can hold non-owning pointers into it.
 typedef struct {
-  Vector str_pools;
-  Vector owned_strs;
+  Vector str_pools;   ///< Pooled string allocations.
+  Vector owned_strs;  ///< Individually-owned string allocations.
 } YamlStore;
 
-// Tokenizer state tracking for parsing (weird sized for padding sense, todo)
+/// @brief Tokenizer/parser state.
+///
+/// @note Field sizes are intentionally mixed for padding/layout reasons
+///       (todo: revisit).
 typedef struct {
-  i32 iffd;          // Input YAML file descriptor
-  u16 blen;          // Buffer len
-  u16 reof;          // EOF reached boolean-ish
-  u16 cpos;          // Current buffer position
-  u16 lpos;          // Current pos in line
-  u16 line;          // Current line number
-  u16 root_mark;     // Levels of indentation + rules
-  ustr chunk;        // Current content buffer
-  YamlStore* store;  // All buffers for strings are here
-  Vector aliases;    // Tracked aliases
-  Token cur_token;   // Most recently parsed token
+  i32 iffd;          ///< Input YAML file descriptor.
+  u16 blen;          ///< Buffer length.
+  u16 cpos;          ///< Current buffer position.
+  u16 lpos;          ///< Current position within the line.
+  u32 line;          ///< Current line number.
+  u16 depth_flw;     ///< Levels of indentation + associated rules.
+  ustr chunk;        ///< Current content buffer.
+  YamlStore* store;  ///< String storage backing this parse.
+  Vector aliases;    ///< Tracked aliases.
+  Token cur_token;   ///< Most recently parsed token.
 } YamlParser;
 
-// Top-level function to parse an entire YAML input string
-Node* parse_yaml (nstr filepath, YamlStore* store)
-  __attribute__ ((ownership_holds (malloc, 1)));
+/// @brief Parse an entire YAML document from a file.
+///
+/// @param filepath Path to the YAML file to parse.
+/// @param store    String storage to allocate parsed strings into; must
+///                 outlive the returned node tree.
+/// @return Pointer to the root ::Node of the parsed document. Ownership
+///         is transferred to the caller (see ::free_yaml).
+[[clang::ownership_returns (yaml_node)]] Node* parse_yaml (
+  nstr filepath, YamlStore* store
+);
 
-// Free all resources associated with a parsed YAML node
-void free_yaml (Node* node);
+/// @brief Free all resources associated with a parsed YAML node tree.
+///
+/// @param node Root node previously returned by ::parse_yaml. Consumed
+///             by this call; must not be used afterward.
+[[clang::ownership_takes (yaml_node, 1)]] void free_yaml (Node* node);
 
-// Retrieve an arbitrary node from a map by its key
+/// @brief Look up a child node in a map by key.
+///
+/// @param node Node to search; must be of kind ::NODE_MAP.
+/// @param key  Key to look up.
+/// @return Pointer to the matching value node, or `NULL` if `node` is
+///         not a map or `key` is not present.
 Node* map_get_node (Node* node, nstr key);

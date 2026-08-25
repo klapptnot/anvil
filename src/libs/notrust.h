@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef __CHAR_BIT__
+#error This assumes that the compiler knows about the machines it targets
+#endif
+
 // it is meant to mean not-rust and no-trust, since
 // adding the pointer `*` backed into the typedef is
 // not safe when people are lazy to write 2 times the
@@ -54,6 +58,7 @@ typedef double f64;
 #define I64_MIN INT64_MIN
 
 // NOLINTBEGIN(readability-magic-numbers)
+static_assert (__CHAR_BIT__ == 8, "byte is not 8 bits, this codebase assumes octets");
 static_assert (sizeof (u8) == 1, "u8 is not 1 byte");
 static_assert (sizeof (u16) == 2, "u16 is not 2 bytes");
 static_assert (sizeof (u32) == 4, "u32 is not 4 bytes");

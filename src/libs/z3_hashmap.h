@@ -26,70 +26,100 @@
 #include <unistd.h>
 #include <z3_toys.h>
 
+/// @brief A single slot in a HashMap's entry table.
 typedef struct {
-  u64 hash;
-  nstr key;
-  void* val;
+  u64 hash;    ///< Cached hash of `key`, used to speed up probing/comparison
+  nstr key;    ///< Owned, heap-duplicated copy of the key
+  void* val;   ///< Pointer to the associated value. Not owned by the map.
 } HashMapEntry;
 
-//~ Auto-growing HashMap<String, &T>
+/// @brief Auto-growing HashMap<String, &T>
 typedef struct {
-  HashMapEntry* beds;
-  usize max;
-  usize len;
-  usize* bfs;
+  HashMapEntry* beds;  ///< Backing array of entries (open-addressed table)
+  usize max;           ///< Current capacity of `beds`
+  usize len;           ///< Number of entries currently stored
+  usize* bfs;          ///< Bitset/flags tracking occupied/tombstoned slots
 } HashMap;
 
+/// @brief Iterator state for walking a HashMap's entries
 typedef struct {
-  HashMap* map;  // pointer to the map being iterated
-  usize idx;     // current index in the table
-  nstr key;      // current key
-  void* val;     // current value
+  HashMap* map;  ///< Pointer to the map being iterated
+  usize idx;     ///< Current index in the table
+  nstr key;      ///< Key of the current entry, set after z3_hashmap_iter_next()
+  void* val;     ///< Value of the current entry, set after z3_hashmap_iter_next()
 } HashMapIterator;
 
+/// @brief Construct a zero-initialized `HashMapIterator` for the given map.
+/// @param m Pointer to the `HashMap` to iterate.
+/// @return A `HashMapIterator` literal ready to pass to z3_hashmap_iter_next().
 #define z3_hashmap_iterator(m)                           \
   (HashMapIterator) {                                    \
     .map = (m), .idx = 0, .key = nullptr, .val = nullptr \
   }
 
-//~ Create a new empty hashmap with default capacity
+/// @brief Create a new empty hashmap with default capacity
+/// @return A newly allocated `HashMap`
 HashMap* z3_hashmap_create (void);
 
-//~ Insert or update a key-value pair in the hashmap
-//! The key is duplicated internally, do not inline strdup
-//! Updating a value does NOT replace the key; again, no strdup
+/// @brief Insert or update a key-value pair in the hashmap
+///
+/// The key is duplicated internally, do not inline strdup. Updating a
+/// value does NOT replace the key; again, no strdup.
+///
+/// @param map Pointer to the target `HashMap`
+/// @param key The key to insert or update
+/// @param value Pointer to the value to associate with `key`
 void z3_hashmap_put (HashMap* map, nstr key, void* value);
 
-//~ Retrieve a value by its key
-//! Returns NULL if key doesn't exist
+/// @brief Retrieve a value by its key
+/// @param map Pointer to the `HashMap`
+/// @param key The key to look up
+/// @return The associated value, or `NULL` if the key doesn't exist
 void* z3_hashmap_get (HashMap* map, nstr key);
 
-//~ Remove a key-value pair from the hashmap
+/// @brief Remove a key-value pair from the hashmap
+/// @param map Pointer to the `HashMap`
+/// @param key The key to remove
 void z3_hashmap_remove (HashMap* map, nstr key);
 
-//~ Check if a key exists in the hashmap
-//! Returns non-zero if key exists, zero otherwise
+/// @brief Check if a key exists in the hashmap
+/// @param map Pointer to the `HashMap`
+/// @param key The key to check
+/// @return `true` if the key exists, `false` otherwise
 bool z3_hashmap_has (HashMap* map, nstr key);
 
-//~ Free all memory associated with the hashmap
+/// @brief Free all memory associated with the hashmap, including the values it owns
+/// @param map Pointer to the `HashMap` to clean up
 void z3_hashmap_drop (HashMap* map);
 
-//~ Free the hashmap memory, leaving values orphaned
+/// @brief Free the hashmap and the keys it owns, leaving values orphaned
+///
+/// Unlike z3_hashmap_drop(), this only releases the map's internal
+/// structure and its owned keys — the values are not touched and must
+/// be freed by the caller if needed.
+///
+/// @param map Pointer to the `HashMap` to clean up
 void z3_hashmap_drop_shallow (HashMap* map);
 
-//~ Initializes an iterator for the given hash map
-//! Must be called before using z3_hashmap_iter_next
+/// @brief Initializes an iterator for the given hash map
+///
+/// Must be called before using z3_hashmap_iter_next().
+///
+/// @param it Pointer to the `HashMapIterator` to initialize
+/// @param map Pointer to the `HashMap` to iterate
 void z3_hashmap_iter_init (HashMapIterator* it, HashMap* map);
 
-//~ Advances the iterator to the next valid entry in the map
-//! Returns true if an entry is found; false if iteration is complete
+/// @brief Advances the iterator to the next valid entry in the map
+/// @param it Pointer to the `HashMapIterator` to advance
+/// @return `true` if an entry was found, `false` if iteration is complete
 bool z3_hashmap_iter_next (HashMapIterator* it);
 
-//~ Define a HashMap with automatic cleanup
-#define ScopedHashMap __attribute__ ((cleanup (z3_hashmap_drop))) HashMap
+/// @brief Define a HashMap with automatic cleanup via GCC/Clang attribute
+#define ScopedHashMap [[gnu::cleanup (z3_hashmap_drop)]] HashMap
 
 #ifdef Z3_HASHMAP_IMPL
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #define Z3_HASHMAP_INITIAL_CAPACITY 32
@@ -98,10 +128,10 @@ bool z3_hashmap_iter_next (HashMapIterator* it);
 
 static u64 z3_hashmap__hash_str (nstr str) {
   // FNV-1a hash
-  u64 hash = 14695981039346656037ULL;  // NOLINT (readability-magic-numbers)
+  u64 hash = 14695981039346656037ULL;  // NOLINT(readability-magic-numbers)
   while (*str) {
     hash ^= (u8)(*str++);
-    hash *= 1099511628211ULL;  // NOLINT (readability-magic-numbers)
+    hash *= 1099511628211ULL;  // NOLINT(readability-magic-numbers)
   }
   return hash;
 }
@@ -148,7 +178,7 @@ void z3_hashmap_put (HashMap* map, nstr key, void* value) {
       (map->max + (Z3_HASHMAP_BITFLAG_CAPACITY - 1)) / Z3_HASHMAP_BITFLAG_CAPACITY;
 
     map->bfs = calloc (new_cap * Z3_HASHMAP_BITFLAG_SIZE, 1);
-    if (map->bfs == nullptr) die ("failed to allocate bitflag maps\n");
+    if (map->bfs == nullptr) die ("failed to allocate bitflag maps");
 
     // rehash all existing entries
     for (usize i = 0; i < old_capacity; ++i) {
@@ -219,7 +249,7 @@ void z3_hashmap_remove (HashMap* map, nstr key) {
     HashMapEntry* entry = &map->beds[idx];
     bool is_used = z3_hashmap_pos_used (map->bfs, idx);
     if ((i32)is_used && (entry->key && strcmp (entry->key, key) == 0)) {
-      // never setting deleted entry to false
+      // never setting pos_used entry to false
       // if (is_used && key == nullptr) /* was deleted, free tombstone */
       // very few changes needed
 
@@ -234,7 +264,7 @@ void z3_hashmap_remove (HashMap* map, nstr key) {
   }
 }
 
-bool z3_hashmap_has (HashMap* map, nstr key) {
+inline bool z3_hashmap_has (HashMap* map, nstr key) {
   return z3_hashmap_get (map, key) != nullptr;
 }
 
@@ -249,7 +279,7 @@ bool z3_hashmap_iter_next (HashMapIterator* it) {
   while (it->idx < it->map->max) {
     usize i = it->idx++;
 
-    if (z3_hashmap_pos_used (it->map->bfs, i)) {
+    if (z3_hashmap_pos_used (it->map->bfs, i) && it->map->beds[i].key) {
       it->key = it->map->beds[i].key;
       it->val = it->map->beds[i].val;
       return true;
@@ -263,8 +293,10 @@ void z3_hashmap_drop (HashMap* map) {
   for (usize i = 0; i < map->max; ++i) {
     if (z3_hashmap_pos_used (map->bfs, i)) {
       HashMapEntry* entry = &map->beds[i];
-      KILL_CAST_QUAL (free ((void*)entry->key);)
-      free (entry->val);
+      if (entry->key) {
+        KILL_CAST_QUAL (free ((void*)entry->key);)
+        free (entry->val);
+      }
     }
   }
   free (map->beds);
@@ -277,7 +309,7 @@ void z3_hashmap_drop_shallow (HashMap* map) {
   for (usize i = 0; i < map->max; ++i) {
     if (z3_hashmap_pos_used (map->bfs, i)) {
       HashMapEntry* entry = &map->beds[i];
-      KILL_CAST_QUAL (free ((void*)entry->key);)
+      KILL_CAST_QUAL (if (entry->key) free ((void*)entry->key);)
     }
   }
   free (map->beds);

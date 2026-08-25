@@ -1,12 +1,31 @@
----
+# .clangd
 CompileFlags:
   Add:
-    - "-I/home/ari/repos/anvil/src/libs"
-    - "-x"
-    - "c"
-    - "-std=c23"
-    - "-Wall"
-    - "-Werror"
-    - "-Wdangling"
-    - "-Wextra"
-    - "-pedantic"
+    - -I/home/ari/repos/anvil/src/libs
+    - -Wpedantic
+    - -pedantic
+Completion:
+  AllScopes: Yes
+  ArgumentLists: FullPlaceholders
+  HeaderInsertion: IWYU
+  CodePatterns: All
+  MacroFilter: FuzzyMatch
+InlayHints:
+  BlockEnd: true
+Diagnostics:
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+Documentation:
+  CommentFormat: Doxygen
+---
+If:
+  PathMatch: .*\.[ch]$
+CompileFlags:
+  Add: [-xc, -std=c23]
+  Compiler: 'clang'
+---
+If:
+  PathMatch: .*\.[ch]pp$
+CompileFlags:
+  Add: [-xc++, -std=c++23]
+  Compiler: 'clang++'

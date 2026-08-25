@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# hooks/load-bytes — embeds a file as a u8 array at compile time
+#
+# Usage in C:
+#   u8* logo = __anvil_hook("load-bytes", "#{AWD}/assets/logo.png");
+
+set -euo pipefail
+
+[ "${ANVIL_STEP}" = "identify" ] && {
+  echo "type: u8*"
+  exit 0
+}
+
+[ "${ANVIL_STEP}" = "comptime" ] && {
+  [ "${ANVIL_HOOK_TYPE}" != "u8*" ] && {
+    echo "load-bytes: expected u8* but got ${ANVIL_HOOK_TYPE}" >&2
+    exit 1
+  }
+
+  [ ${#} -lt 1 ] && {
+    echo "load-bytes: no enough arguments provided" >&2
+    exit 1
+  }
+
+  FILE="${1}"
+  [ ! -f "${FILE}" ] && {
+    echo "load-bytes: file not found: ${FILE}" >&2
+    exit 1
+  }
+
+  # emit as a compound literal: ((u8[]){0x89, 0x50, ...})
+  printf '((u8[]){'
+  xxd -i < "${FILE}" | tr -d '\n '
+  printf '})'
+  exit 0
+}
+
+echo "load-bytes: unknown ANVIL_STEP=${ANVIL_STEP}" >&2
+exit 1
