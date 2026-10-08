@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2025-present Klapptnot
 
+#include <config.h>
 #include <notrust.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -9,30 +10,47 @@
 #include <unistd.h>
 #include <yaml.h>
 #include <z3_hashmap.h>
-#include <z3_vector.h>
+#include <z3_mem.h>
 #include <z3_toys.h>
-#include <config.h>
+#include <z3_vector.h>
+
+static ValidateStr get_validation_policy (Node* vstr) {
+  if (!vstr || vstr->kind != NODE_STRING) return VALIDATE_NONE;
+  cnstr s = (cnstr)vstr->string;
+  if (strcmp (s, "none") == 0) return VALIDATE_NONE;
+  if (strcmp (s, "status") == 0) return VALIDATE_STATUS;
+  if (strcmp (s, "content") == 0) return VALIDATE_CONTENT;
+  if (strcmp (s, "all") == 0) return VALIDATE_ALL;
+  return VALIDATE_NONE;
+}
+
+static CachePolicy get_cache_policy (Node* cply) {
+  if (!cply || cply->kind != NODE_STRING) return CACHE_POLICY_NEVER;
+  cnstr s = (cnstr)cply->string;
+  if (strcmp (s, "never") == 0) return CACHE_POLICY_NEVER;
+  if (strcmp (s, "memoize") == 0) return CACHE_POLICY_MEMOIZE;
+  if (strcmp (s, "always") == 0) return CACHE_POLICY_ALWAYS;
+  return CACHE_POLICY_NEVER;
+}
 
 void dset_argument_config (ArgumentConfig* acon, Node* node) {
   if (!node || node->kind != NODE_MAP) return;
+  Node* cmds = map_get_node (node, "command");
+  if (cmds && cmds->kind == NODE_LIST) return;
 
   Node* vstr = map_get_node (node, "validation");
-  acon->validation = (vstr && vstr->kind == NODE_STRING) ? VALIDATE_ALL : VALIDATE_NONE;
+  acon->validation = get_validation_policy (vstr);
 
   Node* cpol = map_get_node (node, "cache_policy");
-  acon->cache_policy = (cpol && cpol->kind == NODE_STRING) ? CACHE_POLICY_ALWAYS : CACHE_POLICY_NEVER;
+  acon->cache_policy = get_cache_policy (cpol);
 
-  Node* cmds = map_get_node (node, "command");
-  if (cmds && cmds->kind == NODE_LIST) {
-    acon->command_len = cmds->list.size;
-    acon->command = (const u8**)malloc (sizeof (char*) * acon->command_len);
-    for (size_t i = 0; i < acon->command_len; i++) {
-      Node* item = cmds->list.items[i];
-      acon->command[i] = (item && item->kind == NODE_STRING) ? item->string : nullptr;
-    }
-  } else {
-    acon->command = nullptr;
-    acon->command_len = 0;
+
+  acon->command_len = cmds->list.size;
+  acon->command = (const u8**)malloc (sizeof (char*) * acon->command_len);
+  for (size_t i = 0; i < acon->command_len; i++) {
+    Node* item = cmds->list.items[i];
+    acon->command[i] =
+      (item && item->kind == NODE_STRING) ? item->string : nullptr;
   }
 }
 
@@ -52,44 +70,47 @@ void dset_dependency_config (DependencyConfig* dcon, Node* node) {
   dcon->path = (path && path->kind == NODE_STRING) ? path->string : nullptr;
 }
 
-void dset_workspace_config (WorkspaceConfig* wconf, Node* node) {
-  if (!node || node->kind != NODE_MAP) return;
+WorkspaceConfig* dset_workspace_config (Node* node) {
+  if (!node || node->kind != NODE_MAP) return nullptr;
+  WorkspaceConfig* wconf = malloc (sizeof (WorkspaceConfig));
 
   Node* wlibs = map_get_node (node, "libs");
   if (wlibs && wlibs->kind == NODE_STRING) {
     wconf->libs = wlibs->string;
   } else {
-    wconf->libs = (cstr)DEFAULT_LIBS_PATH;
+    wconf->libs = (czstr)DEFAULT_LIBS_PATH;
   }
 
   Node* wtarget = map_get_node (node, "build");
   if (wtarget && wtarget->kind == NODE_STRING) {
     wconf->build = wtarget->string;
   } else {
-    wconf->build = (cstr)DEFAULT_TARGET_PATH;
+    wconf->build = (czstr)DEFAULT_TARGET_PATH;
   }
+
+  return wconf;
 }
 
 void dset_profile_config (HashMap* pconf, Node* node) {
   if (!node || node->kind != NODE_MAP) return;
 
   for (size_t i = 0; i < node->map.size; ++i) {
-    cstr key = node->map.entries[i].key;
+    czstr key = node->map.entries[i].key;
     Node* val = node->map.entries[i].val;
 
     if (!key || !val || val->kind != NODE_LIST) continue;
 
-    Vector* flags = calloc (1, sizeof (Vector));
-    flags->esz = sizeof (char*);
+    Vector* flags = z3_malloc (sizeof (Vector));
+    *flags = z3_vec (nstr, nullptr);
 
     for (size_t j = 0; j < val->list.size; j++) {
       Node* vi = val->list.items[j];
       if (vi && vi->kind == NODE_STRING) {
-        z3_push (flags, vi->string);
+        z3_addv (flags, (void*)&vi->string);
       }
     }
 
-    z3_hashmap_put (pconf, (nstr)key, flags);
+    z3_addm (pconf, (cnstr)key, flags);
   }
 }
 
@@ -102,7 +123,8 @@ void dset_target_config (BuildTarget* tconf, Node* node) {
   }
 
   tconf->count = node->list.size;
-  tconf->target = (TargetConfig**)malloc (sizeof (TargetConfig) * node->list.size);
+  tconf->target =
+    (TargetConfig**)malloc (sizeof (TargetConfig) * node->list.size);
   for (size_t i = 0; i < node->list.size; i++) {
     TargetConfig* tari = malloc (sizeof (TargetConfig));
     Node* tnode = node->list.items[i];
@@ -121,7 +143,8 @@ void dset_target_config (BuildTarget* tconf, Node* node) {
       tari->target = (const u8**)malloc (sizeof (char*) * tnode->list.size);
       for (size_t j = 0; j < tnode->list.size; ++j) {
         Node* elem = tnode->list.items[j];
-        tari->target[j] = (elem && elem->kind == NODE_STRING) ? elem->string : nullptr;
+        tari->target[j] =
+          (elem && elem->kind == NODE_STRING) ? elem->string : nullptr;
       }
     } else {
       tari->target = nullptr;
@@ -133,7 +156,8 @@ void dset_target_config (BuildTarget* tconf, Node* node) {
 
 void dset_build_config (BuildConfig* bconf, Node* node) {
   Node* comp = map_get_node (node, "compiler");
-  bconf->compiler = (comp && comp->kind == NODE_STRING) ? comp->string : nullptr;
+  bconf->compiler =
+    (comp && comp->kind == NODE_STRING) ? comp->string : nullptr;
 
   Node* std = map_get_node (node, "cstd");
   bconf->cstd = (std && std->kind == NODE_STRING) ? std->string : nullptr;
@@ -144,12 +168,12 @@ void dset_build_config (BuildConfig* bconf, Node* node) {
   // --- macros hashmap ---
   Node* macros = map_get_node (node, "macros");
   if (macros && macros->kind == NODE_MAP) {
-    bconf->macros = z3_hashmap_create ();
+    bconf->macros = z3_map (nullptr);
     for (size_t i = 0; i < macros->map.size; ++i) {
-      cstr key = macros->map.entries[i].key;
+      czstr key = macros->map.entries[i].key;
       Node* val = macros->map.entries[i].val;
       if (key && val && val->kind == NODE_STRING) {
-        z3_hashmap_put (bconf->macros, (nstr)key, KILL_CAST_QUAL ((void*)val->string));
+        z3_addm (&bconf->macros, (cnstr)key, Z3_DISCARD_QUAL (val->string));
       }
     }
   }
@@ -157,14 +181,14 @@ void dset_build_config (BuildConfig* bconf, Node* node) {
   // --- arguments hashmap ---
   Node* args = map_get_node (node, "arguments");
   if (args && args->kind == NODE_MAP) {
-    bconf->arguments = z3_hashmap_create ();
+    bconf->arguments = z3_map (free);
     for (size_t i = 0; i < args->map.size; ++i) {
-      cstr key = args->map.entries[i].key;
+      czstr key = args->map.entries[i].key;
       Node* val = args->map.entries[i].val;
       if (key && val && val->kind == NODE_MAP) {
         ArgumentConfig* argconf = malloc (sizeof (ArgumentConfig));
         dset_argument_config (argconf, val);
-        z3_hashmap_put (bconf->arguments, (nstr)key, (void*)argconf);
+        z3_addm (&bconf->arguments, (cnstr)key, (void*)argconf);
       }
     }
   }
@@ -185,7 +209,7 @@ void dset_build_config (BuildConfig* bconf, Node* node) {
 
 AnvilConfig* dset_anvil_config (Node* node) {
   if (!node || node->kind != NODE_MAP) return nullptr;
-  AnvilConfig *conf = malloc (sizeof (AnvilConfig));
+  AnvilConfig* conf = malloc (sizeof (AnvilConfig));
 
   Node* pkg = map_get_node (node, "package");
   conf->package = (pkg && pkg->kind == NODE_STRING) ? pkg->string : nullptr;
@@ -197,13 +221,13 @@ AnvilConfig* dset_anvil_config (Node* node) {
   conf->author = (auth && auth->kind == NODE_STRING) ? auth->string : nullptr;
 
   Node* desc = map_get_node (node, "description");
-  conf->description = (desc && desc->kind == NODE_STRING) ? desc->string : nullptr;
+  conf->description =
+    (desc && desc->kind == NODE_STRING) ? desc->string : nullptr;
 
   // --- Workspace ---
   Node* workspc = map_get_node (node, "workspace");
   if (nullptr != workspc && workspc->kind == NODE_MAP) {
-    conf->workspace = malloc (sizeof (WorkspaceConfig));
-    dset_workspace_config (conf->workspace, workspc);
+    conf->workspace = dset_workspace_config (workspc);
   } else {
     conf->workspace = nullptr;
   }
@@ -229,10 +253,8 @@ AnvilConfig* dset_anvil_config (Node* node) {
   // --- Profiles ---
   Node* profiles_node = map_get_node (node, "profiles");
   if (profiles_node && profiles_node->kind == NODE_MAP) {
-    conf->profiles = z3_hashmap_create ();
-    dset_profile_config (conf->profiles, profiles_node);
-  } else {
-    conf->profiles = nullptr;
+    conf->profiles = z3_map (z3_leakv);
+    dset_profile_config (&conf->profiles, profiles_node);
   }
 
   return conf;
@@ -260,17 +282,7 @@ void free_target_config (BuildTarget* tconf) {
 }
 
 void free_profile_config (HashMap* pconf) {
-  if (!pconf) return;
-
-  // Iterate through hashmap and free each Vector
-  HashMapIterator it = z3_hashmap_iterator (pconf);
-  while (z3_hashmap_iter_next (&it)) {
-    Vector* flags = (Vector*)it.val;
-    // Vector elements are owned by Node tree
-    if (flags) z3_vec_drop (flags);
-  }
-
-  z3_hashmap_drop (pconf);
+  z3_dropm (pconf);
 }
 
 void free_build_config (BuildConfig* bconf) {
@@ -278,21 +290,18 @@ void free_build_config (BuildConfig* bconf) {
 
   // compiler and cstd are owned by Node tree
 
-  if (bconf->macros) {
-    // Hashmap values are owned by Node tree
-    z3_hashmap_drop_shallow (bconf->macros);
-  }
+  // Hashmap values are owned by Node tree
+  z3_leakm (&bconf->macros);
 
-  if (bconf->arguments) {
-    HashMapIterator it = z3_hashmap_iterator (bconf->arguments);
-    while (z3_hashmap_iter_next (&it)) {
-      ArgumentConfig* argconf = (ArgumentConfig*)it.val;
-      if (argconf) {
-        free ((void*)argconf->command);
-      }
-    }
-    z3_hashmap_drop (bconf->arguments);
+  // z3_dropm (&bconf->arguments); // did not free argconf->command
+  HashMapIterator it = z3_iterm (&bconf->arguments);
+  while (z3_nextm (&it)) {
+    ArgumentConfig* argconf = (ArgumentConfig*)it.val;
+    Z3_DISCARD_QUAL (free (it.key));
+    free ((void*)argconf->command);
+    free ((void*)argconf);
   }
+  free (bconf->arguments.bfs);
 
   // All string fields are owned by the Node tree, drop the map
   if (bconf->deps) free (bconf->deps);
@@ -307,12 +316,9 @@ void free_anvil_config (AnvilConfig* conf) {
   // package, version, author, description are owned by Node tree
 
   if (conf->workspace) free (conf->workspace);
-
   if (conf->targets) free_target_config (conf->targets);
-
   if (conf->build) free_build_config (conf->build);
-
-  if (conf->profiles) free_profile_config (conf->profiles);
+  free_profile_config (&conf->profiles);
 
   free (conf);
 }

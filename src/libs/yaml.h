@@ -110,8 +110,8 @@ typedef enum {
 typedef struct {
   u32 _padding;        ///< Unused; reserved for alignment.
   YamlErrorKind kind;  ///< Type of error encountered.
-  nstr exp;            ///< Expected token/context.
-  nstr got;            ///< Actual token/context received.
+  cnstr exp;            ///< Expected token/context.
+  cnstr got;            ///< Actual token/context received.
 } YamlError;
 
 /// @brief A single node in the parsed YAML tree.
@@ -127,7 +127,7 @@ typedef struct {
 
 /// @brief A single key-value entry within a ::YamlMap.
 typedef struct {
-  cstr key;   ///< Key string.
+  czstr key;  ///< Key string.
   Node* val;  ///< Associated value node.
 } YamlMapEntry;
 
@@ -142,7 +142,7 @@ struct Node {
   NodeKind kind;        ///< Type of node; selects the active union member.
   unsigned int rcount;  ///< Reference count (for `&name` -> `*name` aliasing).
   union {
-    cstr string;        ///< Value when kind == NODE_STRING.
+    czstr string;       ///< Value when kind == NODE_STRING.
     f64 number;         ///< Value when kind == NODE_NUMBER.
     bool boolean;       ///< Value when kind == NODE_BOOLEAN.
     YamlList list;      ///< Value when kind == NODE_LIST.
@@ -152,7 +152,7 @@ struct Node {
 
 /// @brief Binding between an anchor name (`&name`) and its target node.
 typedef struct {
-  cstr name;    ///< Anchor name.
+  czstr name;   ///< Anchor name.
   Node* value;  ///< Referenced node.
 } YamlAlias;
 
@@ -166,7 +166,7 @@ typedef struct {
 typedef struct {
   TokenKind kind;  ///< Type of token.
   u32 length;      ///< Token length, in bytes, from `raw`.
-  cstr raw;        ///< Starting position of the token in the input.
+  czstr raw;       ///< Starting position of the token in the input.
 } Token;
 
 /// @brief Backing storage for all string data produced while parsing.
@@ -189,7 +189,7 @@ typedef struct {
   u16 lpos;          ///< Current position within the line.
   u32 line;          ///< Current line number.
   u16 depth_flw;     ///< Levels of indentation + associated rules.
-  ustr chunk;        ///< Current content buffer.
+  zstr chunk;        ///< Current content buffer.
   YamlStore* store;  ///< String storage backing this parse.
   Vector aliases;    ///< Tracked aliases.
   Token cur_token;   ///< Most recently parsed token.
@@ -203,7 +203,7 @@ typedef struct {
 /// @return Pointer to the root ::Node of the parsed document. Ownership
 ///         is transferred to the caller (see ::free_yaml).
 [[clang::ownership_returns (yaml_node)]] Node* parse_yaml (
-  nstr filepath, YamlStore* store
+  cnstr filepath, YamlStore* store
 );
 
 /// @brief Free all resources associated with a parsed YAML node tree.
@@ -218,4 +218,4 @@ typedef struct {
 /// @param key  Key to look up.
 /// @return Pointer to the matching value node, or `NULL` if `node` is
 ///         not a map or `key` is not present.
-Node* map_get_node (Node* node, nstr key);
+Node* map_get_node (Node* node, cnstr key);

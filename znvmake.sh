@@ -44,9 +44,22 @@ function main {
     exec false
   fi
 
-  local file="${!#}"           # last arg is always the current file
+  local run=false
+  local run_args=()
+  local args=("$@")
+
+  for i in "${!args[@]}"; do
+    if [[ "${args[i]}" == "---" ]]; then
+      run=true
+      run_args=("${args[@]:i+1}")
+      args=("${args[@]:0:i}")
+      break
+    fi
+  done
+
+  local file="${args[-1]}"
   read -r file < <(realpath -LE "${file}")
-  local args=("${@:1:${#}-1}") # everything before it is user args
+  args=("${args[@]:0:${#args[@]}-1}")
 
   if [[ ! -r "${file}" ]]; then
     printf 'znvmake.sh: no such file: %s\n' "${file}" >&2
@@ -72,13 +85,16 @@ function main {
   local -a sources=("${file}")
   local -A sources_read=(["${file}"]=1)
   local -i i=0 sources_len=1
-  for ((; i < sources_len; i++)); do
+  for (( ; i < sources_len; i++)); do
     get-sources "${args[@]}" "${sources[i]}"
   done
 
   "${CC}" "${CFLAGS[@]}" "${args[@]}" -o "${out_file}" "${sources[@]}" || exec false
 
   printf 'znvmake.sh: %s\n' "${out_file}"
+  if ${run}; then
+    exec "${out_file}" "${run_args[@]}"
+  fi
 }
 
 main "${@}"

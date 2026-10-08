@@ -13,52 +13,37 @@
 #include <notrust.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <z3_toys.h>
+#include <z3_vector.h>
 
-/// @brief Maximum length in bytes of a single UTF-8 sequence (4 for standard UTF-8).
-#define Z3_UTF8_MAX_SEQ_LEN  4
+/// @brief Maximum length in bytes of a single UTF-8 sequence (4 for standard
+/// UTF-8).
+#define Z3_UTF8_MAX_SEQ_LEN 4
 
-/// @brief Buffer size needed to hold one UTF-8 character plus a null terminator.
+/// @brief Buffer size needed to hold one UTF-8 character plus a null
+/// terminator.
 #define Z3_UTF8_CHAR_BUF_LEN 5
 
 /// Heap-allocated growable string
 typedef struct {
-  ustr chr;   ///< Pointer to the character array
-  usize len;  ///< Current length (excluding null terminator)
   usize max;  ///< Maximum capacity
+  usize len;  ///< Current length (excluding null terminator)
+  [[clang::sized_by (max), clang::counted_by (len)]]
+  zstr chr;   ///< Pointer to the character array
 } String;
 
-/// Heap-allocated string slice
+/// Immutable string slice view
 typedef struct {
-  cstr chr;   ///< Pointer to the slice's byte data. Not null-terminated.
+  czstr chr;  ///< Pointer to the slice's byte data. Not null-terminated.
   usize len;  ///< String slice length
 } StringSlice;
 
-/// @brief Print debug information about a string
-///
-/// Prints formatted debug information including length, max capacity,
-/// and the character payload of the given string `s`.
-///
-/// @param s The `String` (by value, e.g. `myStr` not `&myStr`) to print.
-#define z3_str_dbg(s)                                                                       \
-  printf (                                                                                  \
-    #s " = String {\n  len: %zu,\n  max: %zu,\n  chr: '%s'\n}\n", (s).len, (s).max, (s).chr \
-  );
+/// @brief String that frees its buffer on scope exit
+#define OwnedString [[gnu::cleanup (z3_drops)]] String
 
-/// @brief Push a string literal onto a String, using `sizeof` to get its length.
-/// @param str Pointer to the target `String`
-/// @param lit A string literal (e.g. `"hello"`) — must be an actual literal.
-#define z3_pushlit(str, lit) z3_pushl (str, lit, sizeof (lit) - 1)
-
-/// @brief Construct a `StringSlice` from a raw pointer and length.
-/// @param str A `cstr` pointer to the start of the slice data.
-/// @param length Number of bytes the slice covers.
-/// @return A `StringSlice` literal wrapping the given pointer and length.
-#define z3_string_slice(str, length) (StringSlice) {.chr = (str), .len = (length)}
-
-/// @brief Create a new empty String, with at least `min` capacity
+/// @brief Create a new empty String, with at least @p min capacity
 /// @param min Minimum capacity to preallocate
 /// @return A new initialized `String`.
 String z3_str (usize min);
@@ -66,7 +51,7 @@ String z3_str (usize min);
 /// @brief Create a new String from a C-style string
 /// @param s Pointer to the null-terminated C-string
 /// @return A newly allocated `String` containing the copied data.
-String z3_strcpy (cstr s);
+String z3_strcpy (czstr s);
 
 /// @brief Create a duplicate of an existing String
 /// @param str Pointer to the `String` to copy
@@ -82,7 +67,7 @@ void z3_pushc (String* str, u8 c);
 /// @param str Pointer to the target `String`
 /// @param s Pointer to the byte buffer to append. Need not be null-terminated.
 /// @param l Number of bytes to append
-void z3_pushl (String* str, nstr s, usize l);
+void z3_pushl (String* str, czstr s, usize l);
 
 /// @brief Ensure String has enough allocated memory
 /// @param str Pointer to the `String`
@@ -97,17 +82,18 @@ void z3_drops (String* str);
 /// @param input Pointer to the raw input string buffer
 /// @param len Length of the input buffer
 /// @return A new escaped `String`.
-String z3_escape (cstr input, usize len);
+String z3_escape (czstr input, usize len);
 
-/// @brief Unescape a string, converting escape sequences to their respective characters
+/// @brief Unescape a string, converting escape sequences to their respective
+/// characters
 /// @param input Pointer to the escaped input string buffer
 /// @param len Length of the input buffer
 /// @return A new unescaped `String`.
-String z3_unescape (cstr input, usize len);
+String z3_unescape (czstr input, usize len);
 
 /// @brief Signature for a template placeholder resolver.
 ///
-/// Called by z3_interp() once for each `#{...}` placeholder found in the
+/// Called by z3_interp () once for each `#{...}` placeholder found in the
 /// template. Receives the string built up so far, the raw placeholder
 /// contents (without the `#{` `}` delimiters), and the user-supplied context.
 ///
@@ -116,10 +102,10 @@ String z3_unescape (cstr input, usize len);
 ///             placeholder text. This is a view, not an owned copy — do
 ///             not mutate or free it.
 /// @param ctx  Opaque context pointer, forwarded unchanged from
-///             z3_interp()'s @p ctx argument.
+///             z3_interp ()'s @p ctx argument.
 /// @return `true` to keep the placeholder's `#{...}` text appended to
 ///         @p out, `false` to skip it.
-typedef bool (*z3_filler_fn)(String* out, const StringSlice* expr, void* ctx);
+typedef bool (*z3_filler_fn) (String* out, const StringSlice* expr, void* ctx);
 
 /// @brief Interpolate a template string with values from a filler function.
 ///
@@ -132,7 +118,9 @@ typedef bool (*z3_filler_fn)(String* out, const StringSlice* expr, void* ctx);
 /// @param ctx    User-defined context, passed through unchanged to @p filler.
 ///
 /// @return A newly allocated, interpolated `String`.
-String z3_interp(const String* tmplt, z3_filler_fn filler, void* ctx);
+String z3_interp (const String* tmplt, z3_filler_fn filler, void* ctx);
+
+bool z3_write_raw (int fd, czstr data, usize len);
 
 /// @brief Validate if string contains valid UTF-8 (structure + value)
 ///
@@ -177,29 +165,105 @@ u32 z3_utf8_decode (const u8* c, u64 seq_len);
 /// @param idx Target codepoint index
 /// @param buf Destination buffer, must be at least `Z3_UTF8_CHAR_BUF_LEN` bytes
 /// @return A pointer to the resulting UTF-8 character string (i.e. @p buf)
-const u8* z3_utf8_char_str (const String* s, u64 idx, u8 buf[Z3_UTF8_CHAR_BUF_LEN]);
+const u8* z3_utf8_char_str (
+  const String* s, u64 idx, u8 buf[Z3_UTF8_CHAR_BUF_LEN]
+);
 
 /// @brief Get UTF-8 sequence length from first byte
 /// @param c The first byte of a UTF-8 sequence
 /// @return The expected sequence length in bytes
 u64 z3_utf8_seqlen (u8 c);
 
-/// @brief Define a String with automatic cleanup via GCC/Clang attribute
-#define ScopedString [[gnu::cleanup (z3_drops)]] String
+/// Finds all non-overlapping occurrences of a pattern within a string.
+///
+/// @param str String to search within
+/// @param pat Pattern to search for. Must be 1..256 bytes long
+/// @return Vector of `usize` byte offsets in reference to @p str
+Vector z3_finds (StringSlice str, StringSlice pat);
+
+/// Replaces all non-overlapping occurrences of a pattern within a string,
+/// using the same matches as `z3_finds`.
+///
+/// @param str  String to search within
+/// @param pat  Pattern to replace. Must be 1..256 bytes long
+/// @param with Replacement string
+/// @return String with all matches of @p pat replaced by @p with.
+String z3_repls (StringSlice str, StringSlice pat, StringSlice with);
+
+/// @brief Print debug information about a string
+///
+/// Prints formatted debug information including length, max capacity,
+/// and the character payload of the given string `s`.
+///
+/// @param s The `String` (by value, e.g. `myStr` not `&myStr`) to print.
+#define z3_dbgs(s)                                                \
+  printf (                                                        \
+    #s " = String {\n  len: %zu,\n  max: %zu,\n  chr: '%s'\n}\n", \
+    (s).len,                                                      \
+    (s).max,                                                      \
+    (s).chr                                                       \
+  );
+
+/// @brief Push a string literal onto a String, uses `strlen` for length.
+/// @param str Pointer to the target `String`
+/// @param lit A string literal (e.g. `"hello"`).
+[[clang::always_inline, maybe_unused]]
+static inline void z3_pushlit (String* str, cnstr lit) {
+  z3_pushl (str, (czstr)lit, strlen (lit));
+}
+
+/// @brief Construct a `StringSlice` from a raw pointer and length.
+/// @param str A `czstr` pointer to the start of the slice data.
+/// @param length Number of bytes the slice covers.
+/// @return A `StringSlice` literal wrapping the given pointer and length.
+[[clang::always_inline, maybe_unused]]
+static inline StringSlice z3_str_slice (czstr chr, usize length) {
+  return (StringSlice) {.chr = chr, .len = length};
+}
+
+/// @brief Construct a `StringSlice` from `String`
+/// @param s A `String` pointer to downgrade to slice.
+/// @return A `StringSlice` literal wrapping the given pointer and length.
+[[clang::always_inline, maybe_unused]]
+static inline StringSlice z3_str_as_slice (const String* s) {
+  return (StringSlice) {.chr = s->chr, .len = s->len};
+}
+
+[[clang::always_inline, maybe_unused]]
+static inline bool z3_print (StringSlice s) {
+  return z3_write_raw (1, s.chr, s.len);
+}
+
+[[clang::always_inline, maybe_unused]]
+static inline bool z3_println (StringSlice s) {
+  return z3_write_raw (1, s.chr, s.len) && z3_write_raw (1, (czstr) "\n", 1);
+}
+
+[[clang::always_inline, maybe_unused]]
+static inline bool z3_prints (String s) {
+  return z3_print (z3_str_as_slice (&s));
+}
+
+[[clang::always_inline, maybe_unused]]
+static inline bool z3_printlns (String s) {
+  return z3_println (z3_str_as_slice (&s));
+}
 
 #ifdef Z3_STRING_IMPL
+#include <asm-generic/errno-base.h>
 #include <ctype.h>
+#include <errno.h>
 #include <stdlib.h>
-#include <string.h>
 
 void z3_reserve (String* str, usize additional) {
   if (str == nullptr) die ("z3_reserve: String* == nullptr");
 
   if (str->len + additional >= str->max) {
-    usize new_max = powtwo_ceil (str->len + additional + 1);
+    usize new_max = z3_usize_ceil_align (str->len + additional + 1);
 
-    ustr new_chr = calloc (new_max, sizeof (c8));
-    if (new_chr == nullptr) die ("z3_reserve: requested %zu bytes", new_max);
+    zstr new_chr = calloc (new_max, sizeof (c8));
+    if (new_chr == nullptr)
+      die ("z3_reserve: requested %zu bytes, got nullptr", new_max);
 
     if (str->chr != nullptr) {
       memcpy (new_chr, str->chr, str->len);
@@ -218,7 +282,7 @@ void z3_pushc (String* str, u8 c) {
   str->chr[str->len] = '\0';
 }
 
-void z3_pushl (String* str, nstr s, usize l) {
+void z3_pushl (String* str, czstr s, usize l) {
   z3_reserve (str, l);
   memcpy (str->chr + str->len, s, l);
   str->len += l;
@@ -227,20 +291,22 @@ void z3_pushl (String* str, nstr s, usize l) {
 
 String z3_str (usize min) {
   String str = {0};
-  str.max = powtwo_ceil (min);  // Initial capacity
+  str.max = z3_usize_ceil_align (min + 1);
   str.len = 0;
   str.chr = calloc (str.max, sizeof (c8));
-  if (str.chr == nullptr) die ("z3_str: requested %zu bytes", str.max);
+  if (str.chr == nullptr)
+    die ("z3_str: requested %zu bytes, got nullptr", str.max);
   return str;
 }
 
-String z3_strcpy (cstr s) {
+String z3_strcpy (czstr s) {
   String str = {0};
-  usize len = strlen ((nstr)s) + 1;
-  str.max = ((len & (len - 1)) == 0) ? len : powtwo_ceil (len);
+  usize len = strlen ((cnstr)s) + 1;
+  str.max = ((len & (len - 1)) == 0) ? len : z3_usize_ceil_align (len);
   str.len = len - 1;
   str.chr = calloc (str.max, sizeof (c8));
-  if (str.chr == nullptr) die ("z3_strcpy: requested %zu bytes", str.max);
+  if (str.chr == nullptr)
+    die ("z3_strcpy: requested %zu bytes, got nullptr", str.max);
   memcpy (str.chr, s, len - 1);
   str.chr[str.len] = '\0';
   return str;
@@ -253,7 +319,8 @@ String z3_strdup (const String* str) {
   s.max = str->max;
   s.len = str->len;
   s.chr = calloc (s.max, sizeof (c8));
-  if (s.chr == nullptr) die ("z3_strdup: requested %zu bytes", s.max);
+  if (s.chr == nullptr)
+    die ("z3_strdup: requested %zu bytes, got nullptr", s.max);
 
   memcpy (s.chr, str->chr, str->len);
   s.chr[s.len] = '\0';
@@ -270,6 +337,7 @@ void z3_drops (String* str) {
   str->max = 0;
 }
 
+[[clang::callback (filler, __, __, ctx)]]
 String z3_interp (const String* tmplt, z3_filler_fn filler, void* ctx) {
   String result = z3_str (32);  // NOLINT(readability-magic-numbers)
 
@@ -281,7 +349,8 @@ String z3_interp (const String* tmplt, z3_filler_fn filler, void* ctx) {
       continue;
     }
 
-    if (!(i + 1 < tmplt->len && tmplt->chr[i] == '#' && tmplt->chr[i + 1] == '{')) {
+    if (!(i + 1 < tmplt->len && tmplt->chr[i] == '#' &&
+          tmplt->chr[i + 1] == '{')) {
       z3_pushc (&result, tmplt->chr[i]);
       i++;
       continue;
@@ -300,20 +369,21 @@ String z3_interp (const String* tmplt, z3_filler_fn filler, void* ctx) {
     if (tmplt->chr[path_end] != '}' || path_end >= tmplt->len) {
       // No closing '}' found, treat as literal text
       usize path_len = path_end - path_start + 2;
-      ustr path = malloc (path_len + 1);
+      zstr path = malloc (path_len + 1);
       if (path) {
         memcpy (path, tmplt->chr + path_start - 2, path_len);
         path[path_len] = '\0';
-        z3_pushl (&result, (nstr)path, path_len);
+        z3_pushl (&result, path, path_len);
         free (path);
       }
       i += path_len;
       continue;
     }
 
-    StringSlice path = z3_string_slice (tmplt->chr + path_start, path_end - path_start);
+    StringSlice path =
+      z3_str_slice (tmplt->chr + path_start, path_end - path_start);
     if (filler (&result, &path, ctx)) {
-      z3_pushl (&result, (nstr)(tmplt->chr + i), path.len + 3);  // push entire #{...}
+      z3_pushl (&result, (tmplt->chr + i), path.len + 3);  // push entire #{...}
     }
 
     // Move past the closing '}'
@@ -323,55 +393,58 @@ String z3_interp (const String* tmplt, z3_filler_fn filler, void* ctx) {
   return result;
 }
 
-String z3_escape (cstr input, usize len) {
+String z3_escape (czstr input, usize len) {
   u8 hex_digits[] = "0123456789abcdef";
   String s = z3_str (len);
   usize l = 0;
 
   // loop until `\0`, or until length
-  while (l < len && *input) {
+  while (l < len) {
     u8 c = *input;
     switch (c) {
       case '\a':
-        z3_pushl (&s, "\\a", 2);
+        z3_pushlit (&s, "\\a");
         break;  // Bell
       case '\b':
-        z3_pushl (&s, "\\b", 2);
+        z3_pushlit (&s, "\\b");
         break;  // Backspace
       case '\f':
-        z3_pushl (&s, "\\f", 2);
+        z3_pushlit (&s, "\\f");
         break;  // Formfeed
       case '\n':
-        z3_pushl (&s, "\\n", 2);
+        z3_pushlit (&s, "\\n");
         break;
       case '\r':
-        z3_pushl (&s, "\\r", 2);
+        z3_pushlit (&s, "\\r");
         break;
       case '\t':
-        z3_pushl (&s, "\\t", 2);
+        z3_pushlit (&s, "\\t");
         break;
       case '\v':
-        z3_pushl (&s, "\\v", 2);
+        z3_pushlit (&s, "\\v");
         break;  // Vertical tab
       case '\\':
-        z3_pushl (&s, "\\\\", 2);
+        z3_pushlit (&s, "\\\\");
         break;
       case '\"':
-        z3_pushl (&s, "\\\"", 2);
+        z3_pushlit (&s, "\\\"");
         break;
       case '\'':
-        z3_pushl (&s, "\\\'", 2);
+        z3_pushlit (&s, "\\\'");
         break;
 
       // Printable ASCII (0x20 - 0x7E), no need to escape
       default:
-        if (c < 0x20 || c > 0x7E) {  // NOLINT(readability-magic-numbers)
+        // NOLINTNEXTLINE(readability-magic-numbers)
+        if (c < 0x20 || c > 0x7E) {
           // Non-printables escaped as hex
-          z3_pushc (&s, '\\');                        // Escape char
-          z3_pushc (&s, 'x');                         // 'x' for hex escape
+          z3_pushc (&s, '\\');  // Escape char
+          z3_pushc (&s, 'x');   // 'x' for hex escape
 
-          z3_pushc (&s, hex_digits[(c >> 4) & 0xF]);  // NOLINT(readability-magic-numbers)
-          z3_pushc (&s, hex_digits[c & 0xF]);         // NOLINT(readability-magic-numbers)
+          // NOLINTNEXTLINE(readability-magic-numbers)
+          z3_pushc (&s, hex_digits[(c >> 4) & 0b00001111]);
+          // NOLINTNEXTLINE(readability-magic-numbers)
+          z3_pushc (&s, hex_digits[c & 0b00001111]);
         } else {
           z3_pushc (&s, c);
         }
@@ -383,12 +456,12 @@ String z3_escape (cstr input, usize len) {
   return s;
 }
 
-String z3_unescape (cstr input, usize len) {
+String z3_unescape (czstr input, usize len) {
   String s = z3_str (len);
   usize l = 0;
 
   // loop until `\0`, or until length
-  while (l < len && *input) {
+  while (l < len) {
     if (*input == '\\') {
       input++;  // Skip the backslash
 
@@ -427,7 +500,7 @@ String z3_unescape (cstr input, usize len) {
         case 'x': {
           input++;  // Skip 'x'
           if (!isxdigit (*input)) {
-            z3_pushl (&s, "\\x", 2);
+            z3_pushlit (&s, "\\x");
             z3_pushc (&s, *input++);
             break;
           }
@@ -471,6 +544,19 @@ String z3_unescape (cstr input, usize len) {
   return s;
 }
 
+bool z3_write_raw (int fd, czstr data, usize len) {
+  while (len > 0) {
+    isize n = write (fd, data, len);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+    data += (usize)n;
+    len -= (usize)n;
+  }
+  return true;
+}
+
 StringSlice z3_utf8_char (const String* s, u64 idx) {
   u64 byte_offset = z3_utf8_index (s, idx);
   if (byte_offset >= s->len) {
@@ -478,10 +564,16 @@ StringSlice z3_utf8_char (const String* s, u64 idx) {
   }
 
   u64 char_len = z3_utf8_seqlen (s->chr[byte_offset]);
+
+  if (byte_offset + char_len > s->len)
+    die ("z3_utf8_char: char sequence exceeds string bounds");
+
   return (StringSlice) {.chr = s->chr + byte_offset, .len = char_len};
 }
 
-const u8* z3_utf8_char_str (const String* s, u64 idx, u8 buf[Z3_UTF8_CHAR_BUF_LEN]) {
+const u8* z3_utf8_char_str (
+  const String* s, u64 idx, u8 buf[Z3_UTF8_CHAR_BUF_LEN]
+) {
   u64 byte_offset = z3_utf8_index (s, idx);
   if (byte_offset >= s->len) {
     buf[0] = '\0';
@@ -489,6 +581,11 @@ const u8* z3_utf8_char_str (const String* s, u64 idx, u8 buf[Z3_UTF8_CHAR_BUF_LE
   }
 
   u64 char_len = z3_utf8_seqlen (s->chr[byte_offset]);
+  if (byte_offset + char_len > s->len) {
+    buf[0] = '\0';
+    return buf;
+  }
+
   for (u64 i = 0; i < char_len; i++) {
     buf[i] = s->chr[byte_offset + i];
   }
@@ -498,10 +595,14 @@ const u8* z3_utf8_char_str (const String* s, u64 idx, u8 buf[Z3_UTF8_CHAR_BUF_LE
 }
 
 u64 z3_utf8_seqlen (u8 c) {
-  if ((c & 0x80) == 0) return 1;     // 0xxxxxxx (ASCII) NOLINT(readability-magic-numbers)
-  if ((c & 0xE0) == 0xC0) return 2;  // 110xxxxx (2-byte) NOLINT(readability-magic-numbers)
-  if ((c & 0xF0) == 0xE0) return 3;  // 1110xxxx (3-byte, most CJK) NOLINT(readability-magic-numbers)
-  if ((c & 0xF8) == 0xF0) return 4;  // 11110xxx (4-byte, emoji) NOLINT(readability-magic-numbers)
+  // 0xxxxxxx (ASCII) NOLINTNEXTLINE(readability-magic-numbers)
+  if ((c & 0x80) == 0) return 1;
+  // 110xxxxx (2-byte) NOLINTNEXTLINE(readability-magic-numbers)
+  if ((c & 0xE0) == 0xC0) return 2;
+  // 1110xxxx (3-byte, most CJK) NOLINTNEXTLINE(readability-magic-numbers)
+  if ((c & 0xF0) == 0xE0) return 3;
+  // 11110xxx (4-byte, emoji) NOLINTNEXTLINE(readability-magic-numbers)
+  if ((c & 0xF8) == 0xF0) return 4;
   return 1;  // Invalid UTF-8, treat as single byte
 }
 
@@ -537,19 +638,22 @@ u64 z3_utf8_index (const String* s, u64 codepoint_n) {
 }
 
 u32 z3_utf8_decode (const u8* c, u64 seq_len) {
+  // NOLINTBEGIN(readability-magic-numbers)
   switch (seq_len) {
     case 1:
       return c[0];
     case 2:
-      return ((u32)(c[0] & 0x1F) << 6) | (u32)(c[1] & 0x3F); // NOLINT(readability-magic-numbers)
+      return ((u32)(c[0] & 0x1F) << 6) | (u32)(c[1] & 0x3F);
     case 3:
-      return ((u32)(c[0] & 0x0F) << 12) | ((u32)(c[1] & 0x3F) << 6) | (u32)(c[2] & 0x3F); // NOLINT(readability-magic-numbers)
+      return ((u32)(c[0] & 0x0F) << 12) | ((u32)(c[1] & 0x3F) << 6) |
+             (u32)(c[2] & 0x3F);
     case 4:
-      return ((u32)(c[0] & 0x07) << 18) | ((u32)(c[1] & 0x3F) << 12) | // NOLINT(readability-magic-numbers)
-             ((u32)(c[2] & 0x3F) << 6) | (u32)(c[3] & 0x3F); // NOLINT(readability-magic-numbers)
+      return ((u32)(c[0] & 0x07) << 18) | ((u32)(c[1] & 0x3F) << 12) |
+             ((u32)(c[2] & 0x3F) << 6) | (u32)(c[3] & 0x3F);
     default:
-      return 0xFFFD;  // replacement char, shouldn't happen NOLINT(readability-magic-numbers)
+      return 0xFFFD;  // replacement char, shouldn't happen
   }
+  // NOLINTEND(readability-magic-numbers)
 }
 
 bool z3_utf8_valid (const String* s) {
@@ -560,23 +664,25 @@ bool z3_utf8_valid (const String* s) {
     u8 c = s->chr[i];
     u64 seq_len = z3_utf8_seqlen (c);
 
-    // Check we have enough bytes
     if (i + seq_len > s->len) return false;
 
-    // Validate continuation bytes
+    // continuation bytes
     for (u64 j = 1; j < seq_len; j++) {
-      if ((s->chr[i + j] & 0xC0) != 0x80) return false; // NOLINT(readability-magic-numbers)
+      // NOLINTNEXTLINE(readability-magic-numbers)
+      if ((s->chr[i + j] & 0xC0) != 0x80) return false;
     }
 
-    // Structure is fine, now check the decoded value is legit.
-    // Skip for seq_len == 1: ASCII has no overlong/surrogate concept.
+    // ASCII has no overlong/surrogate concept
     if (seq_len > 1) {
       u32 cp = z3_utf8_decode ((const u8*)s->chr + i, seq_len);
 
       static const u32 min_cp[5] = {0, 0, 0x80, 0x800, 0x10000};
-      if (cp < min_cp[seq_len]) return false;          // overlong
-      if (cp >= 0xD800 && cp <= 0xDFFF) return false;  // surrogate NOLINT(readability-magic-numbers)
-      if (cp > 0x10FFFF) return false;                 // out of range NOLINT(readability-magic-numbers)
+      if (cp < min_cp[seq_len]) return false;  // overlong
+
+      // surrogate NOLINTNEXTLINE(readability-magic-numbers)
+      if (cp >= 0xD800 && cp <= 0xDFFF) return false;
+      // out of range NOLINTNEXTLINE(readability-magic-numbers)
+      if (cp > 0x10FFFF) return false;
     }
 
     i += seq_len;
@@ -585,4 +691,63 @@ bool z3_utf8_valid (const String* s) {
   return true;
 }
 
-#endif  // Z3_STRING_IMPL
+#ifdef Z3_VECTOR_IMPL
+static constexpr usize PATT_ALIGN_TBLEN = 256;
+Vector z3_finds (StringSlice str, StringSlice pat) {
+  if (pat.len == 0) die ("z3_finds: empty pattern");
+  if (pat.len >= PATT_ALIGN_TBLEN)
+    die ("z3_finds: pattern too big (max %zu)", PATT_ALIGN_TBLEN - 1);
+
+  Vector res = z3_vec (usize, nullptr);
+  if (str.len == 0) return res;
+
+  usize len = pat.len - 1;
+  usize i = len;
+
+  u8 table[PATT_ALIGN_TBLEN];
+  memset (table, (u8)pat.len, PATT_ALIGN_TBLEN);
+  for (usize k = 0; k < pat.len - 1; k++) {
+    table[pat.chr[k]] = (u8)(pat.len - 1 - k);
+  }
+
+  while (i < str.len) {
+    if (str.chr[i] != pat.chr[len]) {
+      i += table[str.chr[i]];
+      continue;
+    }
+
+    usize j = 1;
+    while (j < pat.len && str.chr[i - j] == pat.chr[len - j]) j++;
+    if (j != pat.len) {
+      i += table[str.chr[i]];
+      continue;
+    }
+
+    usize offset = i - len;
+    z3_addv (&res, &offset);
+    i += pat.len;
+  }
+
+  return res;
+}
+
+String z3_repls (StringSlice str, StringSlice pat, StringSlice with) {
+  LeakyVector matches = z3_finds (str, pat);
+
+  usize size = str.len + ((with.len * matches.len) - (pat.len * matches.len));
+  String result = z3_str (size);
+
+  usize prev = 0;
+  for (usize i = 0; i < matches.len; i++) {
+    usize off = (usize)z3_getvp (matches, i);
+    z3_pushl (&result, (str.chr + prev), off - prev);
+    z3_pushl (&result, with.chr, with.len);
+    prev = off + pat.len;
+  }
+  if (prev < str.len) z3_pushl (&result, (str.chr + prev), str.len - prev);
+
+  return result;
+}
+#endif // defined Z3_VECTOR_IMPL
+
+#endif

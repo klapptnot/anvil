@@ -4,7 +4,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <notrust.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -17,7 +16,7 @@ bool target_needs_rebuild (String* target, Vector deps) {
   struct stat target_stat;
 
   // target doesn't exist
-  if (stat ((nstr)target->chr, &target_stat) != 0) {
+  if (stat ((cnstr)target->chr, &target_stat) != 0) {
     return true;
   }
 
@@ -25,11 +24,11 @@ bool target_needs_rebuild (String* target, Vector deps) {
   time_t target_mtime = target_stat.st_mtime;
 
   for (usize i = 0; i < deps.len; i++) {
-    String* dep = z3_get (deps, i);
+    String* dep = z3_getv (deps, i);
 
     struct stat dep_stat;
 
-    if (stat ((nstr)dep->chr, &dep_stat) != 0) {
+    if (stat ((cnstr)dep->chr, &dep_stat) != 0) {
       die (
         "Dependency '%s' for target '%s' doesn't exist or can't be accessed: %s",
         dep->chr,
@@ -68,8 +67,8 @@ void parse_dependencies (String* rule_str, Vector* deps) {
     if (len > 0) {
       String s = z3_str (len);
 
-      z3_pushl (&s, (nstr)&rule_str->chr[start], len);
-      z3_push (deps, &s);
+      z3_pushl (&s, (cnstr)&rule_str->chr[start], len);
+      z3_addv (deps, &s);
     }
   }
 }

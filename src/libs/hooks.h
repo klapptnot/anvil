@@ -14,14 +14,17 @@
 typedef struct {
   ValidateStr valid;
   CachePolicy cache;
-  cstr* command;
+  String path;
+  String name;
+  czstr* command;
+  usize  command_len;
 } RuntimeHook;
 
 // Load all hooks from folder and config
-Vector hooks_get_list (AnvilConfig config);
+Vector hooks_load_list ();
 
 // Run and get result of a hook by its name.
-String hooks_run (String name);
+String hooks_run (Vector hooks, String name);
 
 // Get the cached result of a hook by its name.
 String hooks_get_cache (String name);

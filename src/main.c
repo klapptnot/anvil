@@ -4,44 +4,34 @@
 #include <notrust.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define Z3_TOYS_SCOPED
 #define Z3_TOYS_IMPL
+#define Z3_MEM_IMPL
 #define Z3_STRING_IMPL
 #define Z3_HASHMAP_IMPL
 #define Z3_VECTOR_IMPL
+#include <config.h>
+#include <yaml.h>
 #include <z3_hashmap.h>
+#include <z3_mem.h>
 #include <z3_string.h>
 #include <z3_toys.h>
 #include <z3_vector.h>
 
-#include "config.h"
-#include "yaml.h"
+[[maybe_unused]]
+static void z3__display_String (String* val) {
+  OwnedString s = z3_escape (val->chr, val->len);
+  printf ("{ len: %2zu, max: %2zu } \"", s.len, s.max);
+  (void)fflush (stdout);
+  z3_prints (s);
+  putchar ('"');
+}
 
-String int_to_str (int num);
-String float_to_str (float num);
-
-// z3_dropfn (String, z3_drops);
-
-// static bool fill (String* s, void* ctx, const char* path, usize /*unused*/) {
-//   Vector* any = ctx;
-//   usize i = (usize)strtol (path, nullptr, 10);  // NOLINT(readability-magic-numbers)
-//   if (i > any->len) return false;
-//   String* as = z3_get (*any, i);
-//   z3_pushl (s, as->chr, as->len);
-//   return true;
-// }
-
-#define z3__display_String(val)                                \
-  {                                                            \
-    String s = z3_escape ((val)->chr, (val)->len);             \
-    printf ("{l: %2zu, m: %2zu} \"%s\"", s.len, s.max, s.chr); \
-    z3_drops (&s);                                             \
-  }
-
-static void print_anvil_config (const AnvilConfig* config) {
+static void print_anvil_config (AnvilConfig* config) {
   if (!config) {
-    printf ("AnvilConfig is NULL\n");
+    printf ("AnvilConfig is nullptr\n");
     return;
   }
 
@@ -80,30 +70,30 @@ static void print_anvil_config (const AnvilConfig* config) {
   printf ("Jobs       = %d\n", config->build->jobs);
 
   printf ("Macros:\n");
-  if (config->build->macros) {
-    HashMapIterator it;
-    z3_hashmap_iter_init (&it, config->build->macros);
-    while (z3_hashmap_iter_next (&it)) {
+  {
+    HashMapIterator it = z3_iterm (&config->build->macros);
+    while (z3_nextm (&it)) {
       printf ("  %s = %s\n", it.key, (char*)it.val);
     }
   }
 
   printf ("Arguments:\n");
-  if (config->build->arguments) {
-    HashMapIterator it;
-    z3_hashmap_iter_init (&it, config->build->arguments);
-    ScopedString command_line = z3_str (32);  // NOLINT (readability-magic-numbers)
-    while (z3_hashmap_iter_next (&it)) {
+  {
+    HashMapIterator it = z3_iterm (&config->build->arguments);
+    OwnedString command_line =
+      z3_str (32);  // NOLINT (readability-magic-numbers)
+    while (z3_nextm (&it)) {
       printf ("  %s\n", it.key);
       ArgumentConfig* args = it.val;
       printf ("    validation   = %d\n", args->validation);
       printf ("    cache_policy = %d\n", args->cache_policy);
       for (usize i = 0; i < args->command_len; i++) {
-        usize len = strlen ((nstr)args->command[i]);
-        z3_pushl (&command_line, (nstr)args->command[i], len);
+        usize len = strlen ((cnstr)args->command[i]);
+        z3_pushl (&command_line, args->command[i], len);
         if (i < args->command_len - 1) z3_pushc (&command_line, ' ');
       }
       printf ("    :~> %s\n", command_line.chr);
+      command_line.len = 0;
     }
   }
 
@@ -117,16 +107,15 @@ static void print_anvil_config (const AnvilConfig* config) {
     printf ("    Path: %s\n", dep.path);
   }
 
-  // Profiles
-  if (config->profiles) {
+  {
     printf ("\n-- Profiles --\n");
-    HashMapIterator it;
-    z3_hashmap_iter_init (&it, config->profiles);
-    while (z3_hashmap_iter_next (&it)) {
+    HashMapIterator it = z3_iterm (&config->profiles);
+    while (z3_nextm (&it)) {
       Vector* profc = it.val;
       printf ("  %s (%zu):\n", it.key, profc->len);
       for (usize i = 0; i < profc->len; i++) {
-        printf ("      [%zu] %s\n", i, (char*)z3_get (*profc, i));
+        char* s = z3_getvp (*profc, i);
+        printf ("      [%zu] %s\n", i, s);
       }
     }
   }
@@ -134,121 +123,25 @@ static void print_anvil_config (const AnvilConfig* config) {
   printf ("====================\n");
 }
 
-int main (int argc, char** argv) {
+i32 main (i32 argc, cnstr* argv) {
   // u8* file = __anvil_hook ("load-bytes", "hooks/load-bytes");
   // printf ("# load-bytes\n%s", file);
-  (void)popf (argc, argv);  // NOLINT(concurrency-mt-unsafe)
-  char* file_name = popf (argc, argv);   // NOLINT(concurrency-mt-unsafe)
+  (void)popf (argc, argv);              // NOLINT(concurrency-mt-unsafe)
+  cnstr file_name = popf (argc, argv);  // NOLINT(concurrency-mt-unsafe)
 
-  YamlStore store;
+  YamlStore store = {0};
+  z3_register (&store.str_pools, z3_dropv);
+  z3_register (&store.owned_strs, z3_dropv);
+
   Node* root = parse_yaml (file_name, &store);
-
-  if (!root) {
-    errpfmt ("Failed to parse YAML\n");
-    return 1;
-  }
+  if (!root) die ("Empty YAML config file");
+  z3_register (root, free_yaml);
 
   AnvilConfig* config = dset_anvil_config (root);
-  print_anvil_config (config);
-  free_anvil_config (config);
-  free_yaml (root);
-  z3_vec_drain (&store.str_pools, (void(*)(void*))z3_drops);
-  z3_vec_drain (&store.owned_strs, (void(*)(void*))z3_drops);
+  z3_register (config, free_anvil_config);
 
+  print_anvil_config (config);
+
+  z3_drop ();
   return 0;
 }
-
-#ifdef _IGNORE
-#include <math.h>
-String int_to_str (int num) {
-  String str = z3_str (16);
-
-  if (num < 0) {
-    z3_pushc (&str, '-');
-    num = -num;
-  }
-
-  if (num == 0) {
-    z3_pushc (&str, '0');
-    return str;
-  }
-
-  char digits[16];
-  int i = 0;
-
-  while (num > 0 && i < 16) {
-    digits[i++] = '0' + (num % 10);
-    num /= 10;
-  }
-
-  while (i-- > 0) {
-    z3_pushc (&str, digits[i]);
-  }
-
-  return str;
-}
-
-String float_to_str (float num) {
-  String str = z3_str (32);
-
-  if (num == INFINITY) {
-    z3_pushl (&str, "inf", 3);
-    return str;
-  } else if (num == -INFINITY) {
-    z3_pushl (&str, "-inf", 4);
-    return str;
-  } else if (num == 0) {
-    z3_pushc (&str, '0');
-    return str;
-  }
-
-  if (num < 0) {
-    z3_pushc (&str, '-');
-    num = -num;
-  }
-
-  int int_part = (int)num;
-  float frac_part = num - int_part;
-
-  if (int_part == 0) {
-    z3_pushc (&str, '0');
-  } else {
-    char digits[16];
-    int i = 0, temp = int_part;
-    while (temp > 0 && i < 16) {
-      digits[i++] = '0' + (temp % 10);
-      temp /= 10;
-    }
-    while (i-- > 0) {
-      z3_pushc (&str, digits[i]);
-    }
-  }
-
-  if (frac_part > 0) {
-    z3_pushc (&str, '.');
-
-    int frac_int = 1;
-    char frac_digits[8];
-    int j = 0, first_zero = -1;
-
-    // Up to 7 significant places max
-    for (int i = 0; i < 7; i++) {
-      frac_part *= 10;
-      frac_int = (int)(frac_part + 0.5);
-
-      int digit = frac_int % 10;
-      frac_digits[j++] = '0' + digit;
-
-      if (digit == 0) {
-        first_zero = j;
-      }
-    }
-
-    for (int i = 0; i < first_zero; i++) {
-      z3_pushc (&str, frac_digits[i]);
-    }
-  }
-
-  return str;
-}
-#endif

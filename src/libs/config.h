@@ -27,43 +27,44 @@ typedef enum {
 typedef struct {
   ValidateStr validation;
   CachePolicy cache_policy;
-  ustr cached;
-  cstr* command;
+  zstr cached;
+  czstr* name;
+  czstr* command;
   usize command_len;
 } ArgumentConfig;
 
 typedef struct {
-  cstr name;
-  cstr type;
-  cstr repo;
-  cstr path;
+  czstr name;
+  czstr type;
+  czstr repo;
+  czstr path;
 } DependencyConfig;
 
 typedef struct {
-  cstr compiler;
-  cstr cstd;
-  HashMap* macros;
-  HashMap* arguments;
+  czstr compiler;
+  czstr cstd;
+  HashMap macros;
+  HashMap arguments;
   DependencyConfig* deps;
   u32 deps_count;
   u32 jobs;
 } BuildConfig;
 
 typedef struct {
-  cstr libs;
-  cstr build;
+  czstr libs;
+  czstr build;
 } WorkspaceConfig;
 
 typedef struct {
-  cstr* flags;
+  czstr* flags;
   usize flags_count;
 } ProfileConfig;
 
 typedef struct {
-  cstr name;
-  cstr type;
-  cstr main;
-  cstr* target;
+  czstr name;
+  czstr type;
+  czstr main;
+  czstr* target;
   // HashMap* macros; // TODO
   usize target_count;
 } TargetConfig;
@@ -74,14 +75,14 @@ typedef struct {
 } BuildTarget;
 
 typedef struct {
-  cstr package;
-  cstr version;
-  cstr author;
-  cstr description;
+  czstr package;
+  czstr version;
+  czstr author;
+  czstr description;
   WorkspaceConfig* workspace;
   BuildTarget* targets;
   BuildConfig* build;
-  HashMap* profiles;
+  HashMap profiles;
 } AnvilConfig;
 
 // Sets up an AnvilConfig structure based on the provided YAML node.
@@ -94,7 +95,7 @@ void dset_argument_config (ArgumentConfig* acon, Node* node);
 void dset_dependency_config (DependencyConfig* dcon, Node* node);
 
 // Sets up a WorkspaceConfig structure based on the provided YAML node.
-void dset_workspace_config (WorkspaceConfig* wconf, Node* node);
+WorkspaceConfig* dset_workspace_config (Node* node);
 
 // Sets up a ProfileConfig structure based on the provided YAML node.
 void dset_profile_config (HashMap* pconf, Node* node);

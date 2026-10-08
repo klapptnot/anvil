@@ -1,21 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2025-present Klapptnot
 
-/**
- * z3_toys.h
- *
- * Description:
- *   General utility macros and functions for common operations.
- *
- * Features:
- *   - Error printing macros
- *   - Warning silence utilities
- *   - Array manipulation helpers
- *
- * Requires:
- *   - C23 Standard (Use -std=c23).
- *
- */
+/// @file z3_toys.h
+/// @brief Core utility macros and functions for common operations.
+///
+/// Provides error-printing and fatal-exit macros, qualifier-discard
+/// suppression, buffer-popping helpers, and alignment utilities.
+///
+/// @note Requires C23 (`-std=c23`).
 #pragma once
 
 #ifndef __STDC_VERSION__
@@ -25,38 +17,29 @@
 #endif
 
 #include <notrust.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+// clang-format off
 #if defined(__GNUC__) || defined(__clang__)
-/// @brief Suppress `-Wcast-qual` warnings around a declaration/statement.
-///
-/// We enable **all** warnings, so this exists to opt out of just this one,
-/// locally, without silencing it project-wide.
-///
+/// @brief Suppress discarding qualifier warnings around a
+/// declaration/statement.
 /// @param decl The declaration or statement to wrap.
-#define KILL_CAST_QUAL(decl)                           \
-  _Pragma ("GCC diagnostic push")                      \
-    _Pragma ("GCC diagnostic ignored \"-Wcast-qual\"") \
-      decl _Pragma ("GCC diagnostic pop")
+#define Z3_DISCARD_QUAL(decl)                                    \
+  _Pragma ("GCC diagnostic push")                                \
+    _Pragma ("GCC diagnostic ignored \"-Wcast-qual\"") _Pragma ( \
+      "GCC diagnostic ignored \"-Wincompatible-pointer-types-discards-qualifiers\""     \
+    ) decl _Pragma ("GCC diagnostic pop")
 #else
-/// @brief No-op fallback for non-GCC/Clang compilers; unused-variable
-/// suppression isn't available so `decl` passes through unchanged.
+/// @brief No-op fallback; suppression isn't available
 /// @param decl The declaration or statement to wrap.
-#define IGNORE_UNUSED(decl)  decl
-
-/// @brief No-op fallback for non-GCC/Clang compilers; `-Wcast-qual`
-/// suppression isn't available so `decl` passes through unchanged.
-/// @param decl The declaration or statement to wrap.
-#define KILL_CAST_QUAL(decl) decl
+#define Z3_DISCARD_QUAL(decl) decl
 #endif
+// clang-format on
 
-/// @brief Print a formatted error message to stderr in red.
-/// @param fmt printf-style format string.
-/// @param ... Arguments matching `fmt`, if any.
-#define errpfmt(fmt, ...)                                                      \
-  (void)fprintf (                                                              \
-    stderr, "\x1b[38;5;9m[ERROR] " fmt "\x1b[0m\n" __VA_OPT__ (, ) __VA_ARGS__ \
-  )
+#define Z3_CONCAT_(a, b) a##b
+#define Z3_CONCAT(a, b)  Z3_CONCAT_ (a, b)
 
 /// @brief Print a formatted message to stderr, without color or an [ERROR] tag.
 ///
@@ -68,19 +51,20 @@
 #define eprintf(fmt, ...) \
   (void)fprintf (stderr, fmt __VA_OPT__ (, ) __VA_ARGS__)
 
-/// @brief Print a formatted error message and terminate the process
-/// immediately.
-///
-/// Flushes stderr and calls `_exit(1)`, so no atexit handlers or stdio
-/// buffers other than stderr are flushed.
+/// @brief Print a formatted error message to stderr in red.
+/// @param fmt printf-style format string.
+/// @param ... Arguments matching `fmt`, if any.
+#define errpfmt(fmt, ...) \
+  eprintf ("\x1b[38;5;9m[ERROR] " fmt "\x1b[0m\n", __VA_ARGS__)
+
+/// @brief Print a formatted error message and terminate the process.
 ///
 /// @param fmt printf-style format string.
 /// @param ... Arguments matching `fmt`, if any.
-#define die(fmt, ...)           \
-  {                             \
-    errpfmt (fmt, __VA_ARGS__); \
-    (void)fflush (stderr);      \
-    _exit (1);                  \
+#define die(fmt, ...)                             \
+  {                                               \
+    errpfmt (fmt, __VA_ARGS__);                   \
+    exit (1); /* NOLINT(concurrency-mt-unsafe) */ \
   }
 
 /// @brief Pop the next value off a `(count, pointer)` pair, advancing the
@@ -93,10 +77,10 @@
 /// @param v Pointer variable (lvalue) into the buffer, advanced on success.
 /// @return The popped value, or `(typeof(*v))0` on the (unreachable, due
 ///         to `exit`) failure path.
-#define popf(c, v) /* NOLINT(concurrency-mt-unsafe) */           \
-  (c > 0 ? (--c, *v++)                                           \
-         : (errpfmt ("Trying to access a non-existent value\n"), \
-             exit (EXIT_FAILURE),                                \
+#define popf(c, v)                                                    \
+  (c > 0 ? (--c, *v++)                                                \
+         : (errpfmt ("Trying to access a non-existent value"),      \
+             exit (EXIT_FAILURE) /* NOLINT(concurrency-mt-unsafe) */, \
              (typeof (*v))0))
 
 /// @brief Return @p ret_val from the enclosing function if @p expr is negative.
@@ -115,16 +99,35 @@
     exit (EXIT_FAILURE);         \
   }
 
-/// @brief Calculate the next power of 2 greater than or equal to n
+/// @brief Calculate the next power of 2 greater than or equal to @p n
 /// @param n Lower bound value
 /// @return The smallest power of 2 that is `>= n`
-usize powtwo_ceil (usize n);
+usize z3_powtwo_ceil (usize n);
+
+/// @brief Round @p n up to the nearest multiple of `sizeof(void*)`
+/// @param n Lower bound value
+/// @return The smallest multiple of `sizeof(void*)` that is `>= n`
+[[clang::always_inline, maybe_unused]]
+static inline usize z3_usize_ceil_align (usize n) {
+  usize aligned = (n + (sizeof (void*) - 1)) & ~(sizeof (void*) - 1);
+  if (aligned < n)
+    die ("z3_usize_ceil_align: overflow, cannot align to pointer width");
+  return aligned;
+}
+
+/// @brief Round @p n up to the nearest multiple of @p align
+/// @param n Lower bound value
+/// @param align Expected alignment
+/// @return The smallest multiple of @p align that is `>= n`
+[[clang::always_inline, maybe_unused]]
+static inline usize z3_align_to (usize n, usize align) {
+  usize aligned = (n + (align - 1)) & ~(align - 1);
+  if (aligned < n) die ("z3_align_to: overflow, cannot align to boundary");
+  return aligned;
+}
 
 #ifdef Z3_TOYS_IMPL
-// Implementation of utility functions
-
-//~ Calculate the next power of 2 greater than or equal to n
-usize powtwo_ceil (usize n) {
+usize z3_powtwo_ceil (usize n) {
   if (n <= 1) return 1;
   if ((n & (n - 1)) == 0) return n;
 
@@ -134,7 +137,6 @@ usize powtwo_ceil (usize n) {
   // next power of 2 doesn't fit in usize
   if (msb_pos < 63) return (usize)1 << (msb_pos + 1);
 
-  die ("powtwo_ceil: overflow, no larger power of 2 fits in usize");
+  die ("z3_powtwo_ceil: overflow, no larger power of 2 fits in usize");
 }
-
-#endif  // Z3_TOYS_IMPL
+#endif
